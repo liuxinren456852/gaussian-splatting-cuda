@@ -1,6 +1,8 @@
 #include "debug_utils.cuh"
 #include "gaussian.cuh"
 #include "read_utils.cuh"
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <exception>
 #include <thread>
 
@@ -174,6 +176,24 @@ void GaussianModel::prune_points(torch::Tensor mask) {
     _denom = _denom.index_select(0, indices);
     _max_radii2D = _max_radii2D.index_select(0, indices);
 }
+void tensors_to_optimizer(torch::optim::Adam* optimizer,
+                          torch::Tensor& extended_tensor,
+                          torch::Tensor& old_tensor,
+                          at::IntArrayRef extension_size,
+                          int param_position) {
+    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
+        *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
+    optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
+
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    adamParamStates->exp_avg(torch::cat({adamParamStates->exp_avg(), torch::zeros(extension_size, options)}, 0));
+    adamParamStates->exp_avg_sq(torch::cat({adamParamStates->exp_avg_sq(), torch::zeros(extension_size, options)}, 0));
+
+    optimizer->param_groups()[param_position].params()[0] = extended_tensor.set_requires_grad(true);
+    old_tensor = optimizer->param_groups()[param_position].params()[0];
+
+    optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
+}
 
 void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
                               torch::Tensor& extension_tensor,
@@ -240,6 +260,377 @@ void GaussianModel::densify_and_split(torch::Tensor& grads, float grad_threshold
     prune_points(prune_filter);
 }
 
+__global__ void concat_2dim_kernel(
+    const float* __restrict__ src,
+    const int64_t* __restrict__ indices,
+    float* __restrict__ dst,
+    int64_t dim0,
+    int64_t dim1,
+    const long N,
+    const long orig_N) {
+    const long idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N) {
+        return;
+    }
+
+    // Copy selected elements to new tensors, at positions after the original elements
+    const int64_t index = indices[idx];
+    const int64_t dest_idx = orig_N + idx;
+
+    for (long i = 0; i < dim1; i++) {
+        dst[dest_idx * dim1 + i] = src[index * dim1 + i];
+    }
+}
+
+__global__ void concat_4dim_kernel(
+    const float* __restrict__ xyz,
+    const int64_t* __restrict__ indices,
+    float* __restrict__ new_xyz,
+    const size_t N,
+    const size_t orig_N) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N) {
+        return;
+    }
+
+    // Copy selected elements to new tensors, at positions after the original elements
+    const int64_t index = indices[idx];
+    const int64_t dest_idx = orig_N + idx;
+
+    new_xyz[dest_idx * 3] = xyz[index * 3];
+    new_xyz[dest_idx * 3 + 1] = xyz[index * 3 + 1];
+    new_xyz[dest_idx * 3 + 2] = xyz[index * 3 + 2];
+    new_xyz[dest_idx * 3 + 3] = xyz[index * 3 + 3];
+}
+
+__global__ void concat_selection_float3_kernel(
+    const float3* __restrict__ src,
+    const int64_t* __restrict__ indices,
+    float3* __restrict__ dst,
+    const size_t extension_size,
+    const size_t orig_size) {
+
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= extension_size) {
+        return;
+    }
+
+    const int64_t src_index = indices[idx];
+    const int64_t dest_idx = orig_size + idx;
+
+    // Single memory read operation for each 3D point
+    dst[dest_idx] = src[src_index];
+}
+
+__global__ void concat_selection_float4_kernel(
+    const float4* __restrict__ src,
+    const int64_t* __restrict__ indices,
+    float4* __restrict__ dst,
+    const size_t extension_size,
+    const size_t orig_size) {
+
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= extension_size) {
+        return;
+    }
+
+    const int64_t src_index = indices[idx];
+    const int64_t dest_idx = orig_size + idx;
+
+    // Single memory read operation for each 3D point
+    dst[dest_idx] = src[src_index];
+}
+
+__global__ void concat_elements_kernel(
+    //    const float* __restrict__ xyz,
+    const float* __restrict__ features_dc,
+    const float* __restrict__ features_rest,
+    const float* __restrict__ opacity,
+    //    const float* __restrict__ scaling,
+    //    const float* __restrict__ rotation,
+    const int64_t* __restrict__ indices,
+    //    float* __restrict__ new_xyz,
+    float* __restrict__ new_features_dc,
+    float* __restrict__ new_features_rest,
+    float* __restrict__ new_opacity,
+    //    float* __restrict__ new_scaling,
+    //    float* __restrict__ new_rotation,
+    const size_t N,
+    const size_t orig_N,
+    const size_t F1,
+    const size_t F2,
+    const size_t F3) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N) {
+        return;
+    }
+
+    // Copy selected elements to new tensors, at positions after the original elements
+    const int64_t index = indices[idx];
+    const int64_t dest_idx = orig_N + idx;
+
+    //    new_xyz[dest_idx * 3] = xyz[index * 3];
+    //    new_xyz[dest_idx * 3 + 1] = xyz[index * 3 + 1];
+    //    new_xyz[dest_idx * 3 + 2] = xyz[index * 3 + 2];
+
+    //    new_scaling[dest_idx * 3] = scaling[index * 3];
+    //    new_scaling[dest_idx * 3 + 1] = scaling[index * 3 + 1];
+    //    new_scaling[dest_idx * 3 + 2] = scaling[index * 3 + 2];
+
+    new_opacity[dest_idx] = opacity[index];
+
+    //    new_rotation[dest_idx * 4] = rotation[index * 4];
+    //    new_rotation[dest_idx * 4 + 1] = rotation[index * 4 + 1];
+    //    new_rotation[dest_idx * 4 + 2] = rotation[index * 4 + 2];
+    //    new_rotation[dest_idx * 4 + 3] = rotation[index * 4 + 3];
+
+    for (int j = 0; j < F1; j++) {
+        for (int k = 0; k < F2; k++) {
+            new_features_dc[dest_idx * F1 * F2 + j * F2 + k] = features_dc[index * F1 * F2 + j * F2 + k];
+        }
+    }
+
+    for (int j = 0; j < F1; j++) {
+        for (int k = 0; k < F3; k++) {
+            new_features_rest[dest_idx * F1 * F3 + j * F3 + k] = features_rest[index * F1 * F3 + j * F3 + k];
+        }
+    }
+}
+
+__global__ void copy_elements_kernel(
+    const float* __restrict__ xyz,
+    const float* __restrict__ features_dc,
+    const float* __restrict__ features_rest,
+    const float* __restrict__ opacity,
+    const float* __restrict__ scaling,
+    const float* __restrict__ rotation,
+    const int64_t* __restrict__ indices,
+    float* __restrict__ new_xyz,
+    float* __restrict__ new_features_dc,
+    float* __restrict__ new_features_rest,
+    float* __restrict__ new_opacity,
+    float* __restrict__ new_scaling,
+    float* __restrict__ new_rotation,
+    const size_t N,
+    const size_t orig_N,
+    const size_t F1,
+    const size_t F2,
+    const size_t F3) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= orig_N) {
+        return;
+    }
+
+    // Copy selected elements to new tensors, at positions after the original elements
+    new_xyz[idx * 3] = xyz[idx * 3];
+    new_xyz[idx * 3 + 1] = xyz[idx * 3 + 1];
+    new_xyz[idx * 3 + 2] = xyz[idx * 3 + 2];
+
+    new_opacity[idx] = opacity[idx];
+
+    new_scaling[idx * 3] = scaling[idx * 3];
+    new_scaling[idx * 3 + 1] = new_scaling[idx * 3 + 1];
+    new_scaling[idx * 3 + 2] = new_scaling[idx * 3 + 2];
+
+    new_rotation[idx * 4] = rotation[idx * 4];
+    new_rotation[idx * 4 + 1] = rotation[idx * 4 + 1];
+    new_rotation[idx * 4 + 2] = rotation[idx * 4 + 2];
+    new_rotation[idx * 4 + 3] = rotation[idx * 4 + 3];
+
+    for (int j = 0; j < F1; j++) {
+        for (int k = 0; k < F2; k++) {
+            new_features_dc[idx * F1 * F2 + j * F2 + k] = features_dc[idx * F1 * F2 + j * F2 + k];
+        }
+    }
+
+    for (int j = 0; j < F1; j++) {
+        for (int k = 0; k < F3; k++) {
+            new_features_rest[idx * F1 * F3 + j * F3 + k] = features_rest[idx * F1 * F3 + j * F3 + k];
+        }
+    }
+}
+
+void copy3DAsync(const float* src,
+                 const std::vector<long>& src_size,
+                 float* dst,
+                 const std::vector<long>& dst_size,
+                 cudaStream_t stream) {
+    cudaMemcpy3DParms copyParams = {0};
+    copyParams.kind = cudaMemcpyDeviceToDevice;
+
+    copyParams.srcPtr = make_cudaPitchedPtr(
+        (void*)src,
+        (size_t)src_size[2] * sizeof(float),
+        (size_t)src_size[2],
+        (size_t)src_size[1]);
+
+    copyParams.dstPtr = make_cudaPitchedPtr(
+        (void*)dst,
+        (size_t)dst_size[2] * sizeof(float),
+        (size_t)dst_size[2],
+        (size_t)dst_size[1]);
+
+    copyParams.extent = make_cudaExtent(
+        (size_t)src_size[2] * sizeof(float),
+        (size_t)src_size[1],
+        (size_t)src_size[0]);
+    CHECK_CUDA_ERROR(cudaMemcpy3DAsync(&copyParams, stream));
+}
+
+void copy2DAsync(const float* src, const std::vector<long>& src_size, float* dst, cudaStream_t stream) {
+    //    float *new_dst;
+    //    cudaMalloc(&new_dst, dst.size(0) * dst.size(1) * sizeof(float));
+    if (src_size.size() != 2) {
+        std::cout << "src_size.size() != 2" << std::endl;
+        return;
+    }
+    std::cout << "src_size[0]: " << src_size[0] << std::endl;
+    std::cout << "src_size[1]: " << src_size[1] << std::endl;
+    size_t width_in_bytes = src_size[1] * sizeof(float);
+    size_t height_in_elements = src_size[0];
+    size_t src_pitch = src_size[1] * sizeof(float); // provide stride
+    size_t dst_pitch = src_size[1] * sizeof(float); // make stride
+
+    cudaMemcpy2DAsync(
+        dst,                      // Destination pointer
+        dst_pitch,                // Destination pitch
+        src,                      // Source pointer
+        src_pitch,                // Source pitch
+        width_in_bytes,           // Width of the 2D region in bytes
+        height_in_elements,       // Height of the 2D region in elements
+        cudaMemcpyDeviceToDevice, // Specifies the kind of copy (Device to Device)
+        stream                    // Stream to perform the copy
+    );
+    CHECK_LAST_CUDA_ERROR();
+}
+
+void copy1DAsync(const torch::Tensor& src, torch::Tensor& dst, cudaStream_t stream) {
+    // assert(src.size(0) <= dst.size(0));
+
+    size_t bytes_to_copy = src.size(0) * sizeof(float);
+
+    CHECK_CUDA_ERROR(cudaMemcpyAsync(
+        dst.data_ptr(),           // Destination pointer
+        src.data_ptr(),           // Source pointer
+        bytes_to_copy,            // Number of bytes to copy
+        cudaMemcpyDeviceToDevice, // Specifies the kind of copy (Device to Device)
+        stream                    // Stream to perform the copy
+        ));
+}
+
+void select_elements_and_cat(
+    const float* xyz,
+    const std::vector<long>& xyz_size,
+    const float* features_dc,
+    const std::vector<long>& features_dc_size,
+    const float* features_rest,
+    const std::vector<long>& features_rest_size,
+    const float* opacity,
+    const std::vector<long>& opacity_size,
+    const float* scaling,
+    const std::vector<long>& scaling_size,
+    const float* rotation,
+    const std::vector<long>& rotation_size,
+    int64_t* indices,
+    float* new_xyz,
+    const std::vector<long>& new_xyz_size,
+    float* new_features_dc,
+    const std::vector<long>& new_features_dc_size,
+    float* new_features_rest,
+    const std::vector<long>& new_features_rest_size,
+    float* new_opacity,
+    const std::vector<long>& new_opacity_size,
+    float* new_scaling,
+    const std::vector<long>& new_scaling_size,
+    float* new_rotation,
+    const std::vector<long>& new_rotation_size,
+    long F1,
+    long F2,
+    long F3,
+    long original_size,
+    long extension_size) {
+
+    long threads = 512;
+    long blocks = std::max(1L, (extension_size + threads - 1L) / threads);
+    {
+        cudaStream_t stream1, stream2, stream3, stream4, stream5, stream6;
+        cudaStreamCreate(&stream1);
+        cudaStreamCreate(&stream2);
+        cudaStreamCreate(&stream3);
+        cudaStreamCreate(&stream4);
+        cudaStreamCreate(&stream5);
+        cudaStreamCreate(&stream6);
+
+        copy2DAsync(xyz, xyz_size, new_xyz, stream1);
+        //        auto* xyz3_ptr = reinterpret_cast<float3*>(static_cast<float*>(xyz.data_ptr<float>()));
+        //        auto* new_xyz3_ptr = reinterpret_cast<float3*>(static_cast<float*>(new_xyz.data_ptr<float>()));
+        concat_2dim_kernel<<<blocks, threads, 0, stream1>>>(
+            xyz,
+            indices,
+            new_xyz,
+            xyz_size[0],
+            xyz_size[1],
+            extension_size, xyz_size[0]);
+        CHECK_LAST_CUDA_ERROR();
+        copy2DAsync(scaling, scaling_size, new_scaling, stream2);
+        //        auto* scaling3_ptr = reinterpret_cast<float3*>(static_cast<float*>(scaling.data_ptr<float>()));
+        //        auto* new_scaling3_ptr = reinterpret_cast<float3*>(static_cast<float*>(new_scaling.data_ptr<float>()));
+        concat_2dim_kernel<<<blocks, threads, 0, stream2>>>(
+            scaling,
+            indices,
+            new_scaling,
+            scaling_size[0],
+            scaling_size[1],
+            extension_size, scaling_size[0]);
+        CHECK_LAST_CUDA_ERROR();
+        copy3DAsync(features_dc, features_dc_size, new_features_dc, new_features_dc_size, stream3);
+        copy3DAsync(features_rest, features_rest_size, new_features_rest, new_features_rest_size, stream5);
+        copy2DAsync(opacity, opacity_size, new_opacity, stream4);
+        copy2DAsync(rotation, rotation_size, new_rotation, stream6);
+        //        auto* rotation_ptr = reinterpret_cast<float4*>(static_cast<float*>(rotation.data_ptr<float>()));
+        //        auto* new_rotation_ptr = reinterpret_cast<float4*>(static_cast<float*>(rotation.data_ptr<float>()));
+        concat_2dim_kernel<<<blocks, threads, 0, stream6>>>(
+            rotation,
+            indices,
+            new_rotation,
+            rotation_size[0],
+            rotation_size[1],
+            extension_size, rotation_size[0]);
+
+        CHECK_LAST_CUDA_ERROR();
+        cudaStreamSynchronize(stream1);
+        cudaStreamSynchronize(stream2);
+        cudaStreamSynchronize(stream3);
+        cudaStreamSynchronize(stream4);
+        cudaStreamSynchronize(stream5);
+        cudaStreamSynchronize(stream6);
+        cudaStreamDestroy(stream1);
+        cudaStreamDestroy(stream2);
+        cudaStreamDestroy(stream3);
+        cudaStreamDestroy(stream4);
+        cudaStreamDestroy(stream5);
+        cudaStreamDestroy(stream6);
+    }
+    std::cout << "After cudaStreamDestory" << std::endl;
+    CHECK_LAST_CUDA_ERROR();
+
+    concat_elements_kernel<<<blocks, threads>>>(
+        //        xyz.data_ptr<float>(),
+        features_dc,
+        features_rest,
+        opacity,
+        //        scaling.data_ptr<float>(),
+        //        rotation.data_ptr<float>(),
+        indices,
+        //        new_xyz.data_ptr<float>(),
+        new_features_dc,
+        new_features_rest,
+        new_opacity,
+        //        new_scaling.data_ptr<float>(),
+        //        new_rotation.data_ptr<float>(),
+        extension_size, xyz_size[0], F1, F2, F3);
+}
+
 void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold, float scene_extent) {
     // Extract points that satisfy the gradient condition
     torch::Tensor selected_pts_mask = torch::where(torch::linalg::vector_norm(grads, {2}, 1, true, torch::kFloat32) >= grad_threshold,
@@ -250,14 +641,67 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
     selected_pts_mask = torch::logical_and(selected_pts_mask, std::get<0>(Get_scaling().max(1)).unsqueeze(-1) <= _percent_dense * scene_extent);
 
     auto indices = torch::nonzero(selected_pts_mask.squeeze(-1) == true).index({torch::indexing::Slice(torch::indexing::None, torch::indexing::None), torch::indexing::Slice(torch::indexing::None, 1)}).squeeze(-1);
-    torch::Tensor new_xyz = _xyz.index_select(0, indices);
-    torch::Tensor new_features_dc = _features_dc.index_select(0, indices);
-    torch::Tensor new_features_rest = _features_rest.index_select(0, indices);
-    torch::Tensor new_opacity = _opacity.index_select(0, indices);
-    torch::Tensor new_scaling = _scaling.index_select(0, indices);
-    torch::Tensor new_rotation = _rotation.index_select(0, indices);
+    const auto extension_count = torch::sum(selected_pts_mask).item<int>();
+    const auto total_extension_count = _xyz.size(0) + extension_count;
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    torch::Tensor new_xyz = torch::zeros({total_extension_count, 3}, options);
+    torch::Tensor new_features_dc = torch::zeros({total_extension_count, _features_dc.size(1), _features_dc.size(2)}, options);
+    torch::Tensor new_features_rest = torch::zeros({total_extension_count, _features_rest.size(1), _features_rest.size(2)}, options);
+    torch::Tensor new_opacity = torch::zeros({total_extension_count, 1}, options);
+    torch::Tensor new_scaling = torch::zeros({total_extension_count, 3}, options);
+    torch::Tensor new_rotation = torch::zeros({total_extension_count, 4}, options);
+    std::cout << "Print extension size: " << extension_count << std::endl;
+    const auto F1 = _features_dc.size(1);
+    const auto F2 = _features_dc.size(2);
+    const auto F3 = _features_rest.size(2);
+    ts::print_debug_info(_xyz, "xyz");
+    ts::print_debug_info(_features_dc, "features_dc");
+    ts::print_debug_info(_features_rest, "features_rest");
+    ts::print_debug_info(_opacity, "opacity");
+    ts::print_debug_info(_scaling, "scaling");
+    ts::print_debug_info(_rotation, "rotation");
+    select_elements_and_cat(_xyz.data_ptr<float>(),
+                            {_xyz.size(0), _xyz.size(1)},
+                            _features_dc.data_ptr<float>(),
+                            {_features_dc.size(0), _features_dc.size(1), _features_dc.size(2)},
+                            _features_rest.data_ptr<float>(),
+                            {_features_rest.size(0), _features_rest.size(1), _features_rest.size(2)},
+                            _opacity.data_ptr<float>(),
+                            {_opacity.size(0), _opacity.size(1)},
+                            _scaling.data_ptr<float>(),
+                            {_scaling.size(0), _scaling.size(1)},
+                            _rotation.data_ptr<float>(),
+                            {_rotation.size(0), _rotation.size(1)},
+                            indices.data_ptr<int64_t>(),
+                            new_xyz.data_ptr<float>(),
+                            {new_xyz.size(0), new_xyz.size(1)},
+                            new_features_dc.data_ptr<float>(),
+                            {new_features_dc.size(0), new_features_dc.size(1), new_features_dc.size(2)},
+                            new_features_rest.data_ptr<float>(),
+                            {new_features_rest.size(0), new_features_rest.size(1), new_features_rest.size(2)},
+                            new_opacity.data_ptr<float>(),
+                            {new_opacity.size(0), new_opacity.size(1)},
+                            new_scaling.data_ptr<float>(),
+                            {new_scaling.size(0), new_scaling.size(1)},
+                            new_rotation.data_ptr<float>(),
+                            {new_rotation.size(0), new_rotation.size(1)},
+                            F1, F2, F3,
+                            _xyz.size(0),
+                            extension_count);
 
-    densification_postfix(new_xyz, new_features_dc, new_features_rest, new_scaling, new_rotation, new_opacity);
+    tensors_to_optimizer(_optimizer.get(), new_xyz, _xyz, {extension_count, _xyz.size(1)}, 0);
+    tensors_to_optimizer(_optimizer.get(), new_features_dc, _features_dc, {extension_count, _features_dc.size(1), _features_dc.size(2)}, 1);
+    tensors_to_optimizer(_optimizer.get(), new_features_rest, _features_rest, {extension_count, _features_rest.size(1), _features_rest.size(2)}, 2);
+    tensors_to_optimizer(_optimizer.get(), new_scaling, _scaling, {extension_count, _scaling.size(1)}, 3);
+    tensors_to_optimizer(_optimizer.get(), new_rotation, _rotation, {extension_count, _rotation.size(1)}, 4);
+    tensors_to_optimizer(_optimizer.get(), new_opacity, _opacity, {extension_count, _opacity.size(1)}, 5);
+
+    ts::print_debug_info(_xyz, "xyz after");
+    ts::print_debug_info(new_xyz, "new_xyz after");
+
+    _xyz_gradient_accum = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
+    _denom = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
+    _max_radii2D = torch::zeros({_xyz.size(0)}).to(torch::kCUDA);
 }
 
 void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float extent, float max_screen_size) {

@@ -36,7 +36,7 @@ namespace BACKWARD {
         float* dL_dopacity,
         float* dL_dcolors);
 
-    void preprocess(
+    void preprocessBackward(
         int P, int D, int M,
         const float3* means,
         const int* radii,

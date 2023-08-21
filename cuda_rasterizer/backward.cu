@@ -134,16 +134,16 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::
 // Backward version of INVERSE 2D covariance matrix computation
 // (due to length launched as separate kernel before other
 // backward steps contained in preprocess)
-__global__ void computeCov2DCUDA(int P,
-                                 const float3* means,
-                                 const int* radii,
-                                 const float* cov3Ds,
-                                 const float h_x, float h_y,
-                                 const float tan_fovx, float tan_fovy,
-                                 const float* view_matrix,
-                                 const float* dL_dconics,
-                                 float3* dL_dmeans,
-                                 float* dL_dcov) {
+__global__ void computeCov2DCUDABackward(int P,
+                                         const float3* means,
+                                         const int* radii,
+                                         const float* cov3Ds,
+                                         const float h_x, float h_y,
+                                         const float tan_fovx, float tan_fovy,
+                                         const float* view_matrix,
+                                         const float* dL_dconics,
+                                         float3* dL_dmeans,
+                                         float* dL_dcov) {
     auto idx = cg::this_grid().thread_rank();
     if (idx >= P || !(radii[idx] > 0))
         return;
@@ -330,7 +330,7 @@ __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const gl
 // for the covariance computation and inversion
 // (those are handled by a previous kernel call)
 template <int C>
-__global__ void preprocessCUDA(
+__global__ void preprocessCUDABackward(
     int P, int D, int M,
     const float3* means,
     const int* radii,
@@ -381,8 +381,6 @@ __global__ void preprocessCUDA(
 }
 
 // Constants for magic numbers
-__constant__ float ALPHA_THRESHOLD = 1.0f / 255.0f;
-__constant__ float ALPHA_LIMIT = 0.99f;
 const int D = 4;
 
 __constant__ int d_W;
@@ -600,7 +598,7 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
     }
 }
 
-void BACKWARD::preprocess(
+void BACKWARD::preprocessBackward(
     int P, int D, int M,
     const float3* means3D,
     const int* radii,
@@ -627,7 +625,7 @@ void BACKWARD::preprocess(
     // Somewhat long, thus it is its own kernel rather than being part of
     // "preprocess". When done, loss gradient w.r.t. 3D means has been
     // modified and gradient w.r.t. 3D covariance matrix has been computed.
-    computeCov2DCUDA<<<(P + 255) / 256, 256>>>(
+    computeCov2DCUDABackward<<<(P + 255) / 256, 256>>>(
         P,
         means3D,
         radii,
@@ -644,7 +642,7 @@ void BACKWARD::preprocess(
     // Propagate gradients for remaining steps: finish 3D mean gradients,
     // propagate color gradients to SH (if desireD), propagate 3D covariance
     // matrix gradients to scale and rotation.
-    preprocessCUDA<NUM_CHANNELS><<<(P + 255) / 256, 256>>>(
+    preprocessCUDABackward<NUM_CHANNELS><<<(P + 255) / 256, 256>>>(
         P, D, M,
         (float3*)means3D,
         radii,

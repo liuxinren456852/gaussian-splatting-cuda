@@ -243,7 +243,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
     tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
 
-__constant__ float ALPHA_THRESHOLD = 1.0f / 255.0f;
 __constant__ float ALPHA_MIN = 0.0001f;
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching

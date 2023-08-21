@@ -106,7 +106,8 @@ int main(int argc, char* argv[]) {
             gaussians._max_radii2D.masked_scatter_(visibility_filter, max_radii);
 
             if (iter % 7'000 == 0) {
-                gaussians.Save_ply(modelParams.model_path, iter, false);
+                gaussians.Save_ply(modelParams.model_path, iter, true);
+                exit(0);
             }
             if (iter == 30'000) {
                 gaussians.Save_ply(modelParams.model_path, iter, true);
