@@ -15,6 +15,7 @@
 class GaussianModel {
 public:
     explicit GaussianModel(int sh_degree);
+    ~GaussianModel();
     // Copy constructor
     GaussianModel(const GaussianModel& other) = delete;
     // Copy assignment operator
@@ -63,6 +64,37 @@ private:
     void densify_and_clone(torch::Tensor& grads, float grad_threshold, float scene_extent);
     void densify_and_split(torch::Tensor& grads, float grad_threshold, float scene_extent, float min_opacity, float max_screen_size);
     std::vector<std::string> construct_list_of_attributes();
+    void select_elements_and_cat(
+        const float* xyz,
+        const std::vector<long>& xyz_size,
+        const float* features_dc,
+        const std::vector<long>& features_dc_size,
+        const float* features_rest,
+        const std::vector<long>& features_rest_size,
+        const float* opacity,
+        const std::vector<long>& opacity_size,
+        const float* scaling,
+        const std::vector<long>& scaling_size,
+        const float* rotation,
+        const std::vector<long>& rotation_size,
+        int64_t* indices,
+        float* new_xyz,
+        const std::vector<long>& new_xyz_size,
+        float* new_features_dc,
+        const std::vector<long>& new_features_dc_size,
+        float* new_features_rest,
+        const std::vector<long>& new_features_rest_size,
+        float* new_opacity,
+        const std::vector<long>& new_opacity_size,
+        float* new_scaling,
+        const std::vector<long>& new_scaling_size,
+        float* new_rotation,
+        const std::vector<long>& new_rotation_size,
+        long F1,
+        long F2,
+        long F3,
+        long original_size,
+        long extension_size);
 
 private:
     int _active_sh_degree;
@@ -71,6 +103,12 @@ private:
     float _percent_dense{};
 
     Expon_lr_func _xyz_scheduler_args;
+    cudaStream_t _stream1;
+    cudaStream_t _stream2;
+    cudaStream_t _stream3;
+    cudaStream_t _stream4;
+    cudaStream_t _stream5;
+    cudaStream_t _stream6;
     torch::Tensor _denom;
     torch::Tensor _xyz;
     torch::Tensor _features_dc;

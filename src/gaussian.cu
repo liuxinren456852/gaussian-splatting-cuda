@@ -7,8 +7,22 @@
 #include <thread>
 
 GaussianModel::GaussianModel(int sh_degree) : _max_sh_degree(sh_degree) {
+    cudaStreamCreate(&_stream1);
+    cudaStreamCreate(&_stream2);
+    cudaStreamCreate(&_stream3);
+    cudaStreamCreate(&_stream4);
+    cudaStreamCreate(&_stream5);
+    cudaStreamCreate(&_stream6);
 }
 
+GaussianModel::~GaussianModel() {
+    cudaStreamDestroy(_stream1);
+    cudaStreamDestroy(_stream2);
+    cudaStreamDestroy(_stream3);
+    cudaStreamDestroy(_stream4);
+    cudaStreamDestroy(_stream5);
+    cudaStreamDestroy(_stream6);
+}
 torch::Tensor GaussianModel::Get_covariance(float scaling_modifier) {
     auto L = build_scaling_rotation(scaling_modifier * Get_scaling(), _rotation);
     auto actual_covariance = torch::mm(L, L.transpose(1, 2));
@@ -402,59 +416,6 @@ __global__ void concat_elements_kernel_features_rest(
     }
 }
 
-__global__ void copy_elements_kernel(
-    const float* __restrict__ xyz,
-    const float* __restrict__ features_dc,
-    const float* __restrict__ features_rest,
-    const float* __restrict__ opacity,
-    const float* __restrict__ scaling,
-    const float* __restrict__ rotation,
-    const int64_t* __restrict__ indices,
-    float* __restrict__ new_xyz,
-    float* __restrict__ new_features_dc,
-    float* __restrict__ new_features_rest,
-    float* __restrict__ new_opacity,
-    float* __restrict__ new_scaling,
-    float* __restrict__ new_rotation,
-    const size_t N,
-    const size_t orig_N,
-    const size_t F1,
-    const size_t F2,
-    const size_t F3) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= orig_N) {
-        return;
-    }
-
-    // Copy selected elements to new tensors, at positions after the original elements
-    new_xyz[idx * 3] = xyz[idx * 3];
-    new_xyz[idx * 3 + 1] = xyz[idx * 3 + 1];
-    new_xyz[idx * 3 + 2] = xyz[idx * 3 + 2];
-
-    new_opacity[idx] = opacity[idx];
-
-    new_scaling[idx * 3] = scaling[idx * 3];
-    new_scaling[idx * 3 + 1] = new_scaling[idx * 3 + 1];
-    new_scaling[idx * 3 + 2] = new_scaling[idx * 3 + 2];
-
-    new_rotation[idx * 4] = rotation[idx * 4];
-    new_rotation[idx * 4 + 1] = rotation[idx * 4 + 1];
-    new_rotation[idx * 4 + 2] = rotation[idx * 4 + 2];
-    new_rotation[idx * 4 + 3] = rotation[idx * 4 + 3];
-
-    for (int j = 0; j < F1; j++) {
-        for (int k = 0; k < F2; k++) {
-            new_features_dc[idx * F1 * F2 + j * F2 + k] = features_dc[idx * F1 * F2 + j * F2 + k];
-        }
-    }
-
-    for (int j = 0; j < F1; j++) {
-        for (int k = 0; k < F3; k++) {
-            new_features_rest[idx * F1 * F3 + j * F3 + k] = features_rest[idx * F1 * F3 + j * F3 + k];
-        }
-    }
-}
-
 void copy3DAsync(const float* src,
                  const std::vector<long>& src_size,
                  float* dst,
@@ -523,7 +484,7 @@ void copy1DAsync(const torch::Tensor& src, torch::Tensor& dst, cudaStream_t stre
         ));
 }
 
-void select_elements_and_cat(
+void GaussianModel::select_elements_and_cat(
     const float* xyz,
     const std::vector<long>& xyz_size,
     const float* features_dc,
@@ -558,83 +519,71 @@ void select_elements_and_cat(
     long threads = 512;
     long blocks = std::max(1L, (extension_size + threads - 1L) / threads);
     {
-        cudaStream_t stream1, stream2, stream3, stream4, stream5, stream6;
-        cudaStreamCreate(&stream1);
-        cudaStreamCreate(&stream2);
-        cudaStreamCreate(&stream3);
-        cudaStreamCreate(&stream4);
-        cudaStreamCreate(&stream5);
-        cudaStreamCreate(&stream6);
-
-        copy2DAsync(opacity, opacity_size, new_opacity, stream4);
-        concat_elements_kernel_opacity<<<blocks, threads, 0, stream4>>>(
-            opacity,
-            indices,
-            new_opacity,
-            extension_size,
-            xyz_size[0]);
-        copy2DAsync(xyz, xyz_size, new_xyz, stream1);
+        copy2DAsync(xyz, xyz_size, new_xyz, _stream1);
         const auto* xyz3_ptr = reinterpret_cast<const float3*>(xyz);
         auto* new_xyz3_ptr = reinterpret_cast<float3*>(new_xyz);
-        concat_selection_float3_kernel<<<blocks, threads, 0, stream1>>>(
+        concat_selection_float3_kernel<<<blocks, threads, 0, _stream1>>>(
             xyz3_ptr,
             indices,
             new_xyz3_ptr,
             extension_size,
             xyz_size[0]);
-        CHECK_LAST_CUDA_ERROR();
-        copy2DAsync(scaling, scaling_size, new_scaling, stream2);
+
+        copy2DAsync(scaling, scaling_size, new_scaling, _stream2);
         const auto* scaling3_ptr = reinterpret_cast<const float3*>(scaling);
         auto* new_scaling3_ptr = reinterpret_cast<float3*>(new_scaling);
-        concat_selection_float3_kernel<<<blocks, threads, 0, stream2>>>(
+        concat_selection_float3_kernel<<<blocks, threads, 0, _stream2>>>(
             scaling3_ptr,
             indices,
             new_scaling3_ptr,
             extension_size,
             scaling_size[0]);
-        CHECK_LAST_CUDA_ERROR();
-        copy3DAsync(features_dc, features_dc_size, new_features_dc, new_features_dc_size, stream3);
+
+        copy3DAsync(features_dc, features_dc_size, new_features_dc, new_features_dc_size, _stream3);
         const auto* features_dc_ptr = reinterpret_cast<const float3*>(features_dc);
         auto* new_features_dc_ptr = reinterpret_cast<float3*>(new_features_dc);
-        concat_elements_kernel_features_dc<<<blocks, threads, 0, stream3>>>(
+        concat_elements_kernel_features_dc<<<blocks, threads, 0, _stream3>>>(
             features_dc_ptr,
             indices,
             new_features_dc_ptr,
             extension_size,
             xyz_size[0], F1);
-        copy3DAsync(features_rest, features_rest_size, new_features_rest, new_features_rest_size, stream5);
+
+        copy2DAsync(opacity, opacity_size, new_opacity, _stream4);
+        concat_elements_kernel_opacity<<<blocks, threads, 0, _stream4>>>(
+            opacity,
+            indices,
+            new_opacity,
+            extension_size,
+            xyz_size[0]);
+
+        copy3DAsync(features_rest, features_rest_size, new_features_rest, new_features_rest_size, _stream5);
         const auto* features_rest_ptr = reinterpret_cast<const float3*>(features_rest);
         auto* new_features_rest_ptr = reinterpret_cast<float3*>(new_features_rest);
-        concat_elements_kernel_features_rest<<<blocks, threads, 0, stream5>>>(
+        concat_elements_kernel_features_rest<<<blocks, threads, 0, _stream5>>>(
             features_rest_ptr,
             indices,
             new_features_rest_ptr,
             extension_size,
             xyz_size[0],
             F1, F3);
-        copy2DAsync(rotation, rotation_size, new_rotation, stream6);
+
+        copy2DAsync(rotation, rotation_size, new_rotation, _stream6);
         auto* rotation_ptr = reinterpret_cast<const float4*>(rotation);
         auto* new_rotation_ptr = reinterpret_cast<float4*>(new_rotation);
-        concat_selection_float4_kernel<<<blocks, threads, 0, stream6>>>(
+        concat_selection_float4_kernel<<<blocks, threads, 0, _stream6>>>(
             rotation_ptr,
             indices,
             new_rotation_ptr,
             extension_size,
             rotation_size[0]);
 
-        CHECK_LAST_CUDA_ERROR();
-        cudaStreamSynchronize(stream1);
-        cudaStreamSynchronize(stream2);
-        cudaStreamSynchronize(stream3);
-        cudaStreamSynchronize(stream4);
-        cudaStreamSynchronize(stream5);
-        cudaStreamSynchronize(stream6);
-        cudaStreamDestroy(stream1);
-        cudaStreamDestroy(stream2);
-        cudaStreamDestroy(stream3);
-        cudaStreamDestroy(stream4);
-        cudaStreamDestroy(stream5);
-        cudaStreamDestroy(stream6);
+        cudaStreamSynchronize(_stream1);
+        cudaStreamSynchronize(_stream2);
+        cudaStreamSynchronize(_stream3);
+        cudaStreamSynchronize(_stream4);
+        cudaStreamSynchronize(_stream5);
+        cudaStreamSynchronize(_stream6);
     }
     std::cout << "After cudaStreamDestory" << std::endl;
     CHECK_LAST_CUDA_ERROR();
@@ -663,12 +612,12 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
     const auto F1 = _features_dc.size(1);
     const auto F2 = _features_dc.size(2);
     const auto F3 = _features_rest.size(2);
-    ts::print_debug_info(_xyz, "xyz");
-    ts::print_debug_info(_features_dc, "features_dc");
-    ts::print_debug_info(_features_rest, "features_rest");
-    ts::print_debug_info(_opacity, "opacity");
-    ts::print_debug_info(_scaling, "scaling");
-    ts::print_debug_info(_rotation, "rotation");
+    //    ts::print_debug_info(_xyz, "xyz");
+    //    ts::print_debug_info(_features_dc, "features_dc");
+    //    ts::print_debug_info(_features_rest, "features_rest");
+    //    ts::print_debug_info(_opacity, "opacity");
+    //    ts::print_debug_info(_scaling, "scaling");
+    //    ts::print_debug_info(_rotation, "rotation");
     select_elements_and_cat(_xyz.data_ptr<float>(),
                             {_xyz.size(0), _xyz.size(1)},
                             _features_dc.data_ptr<float>(),
