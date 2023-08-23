@@ -162,7 +162,6 @@ int main(int argc, char* argv[]) {
         auto gt_image = cam.Get_original_image().to(torch::kCUDA);
         auto l1l = gaussian_splatting::l1_loss(image, gt_image);
         auto loss = (1.f - optimParams.lambda_dssim) * l1l + optimParams.lambda_dssim * (1.f - gaussian_splatting::ssim(image, gt_image));
-        //        std::cout << "Iteration: " << iter << " Loss: " << loss.item<float>() << " gaussian splats: " << gaussians.Get_xyz().size(0) << std::endl;
         if (optimParams.early_stopping) {
             avg_converging_rate = loss_monitor.Update(loss.item<float>());
         }

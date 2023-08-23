@@ -260,6 +260,27 @@ void GaussianModel::densify_and_split(torch::Tensor& grads, float grad_threshold
     prune_points(prune_filter);
 }
 
+__global__ void concat_4dim_kernel(
+    const float* __restrict__ xyz,
+    const int64_t* __restrict__ indices,
+    float* __restrict__ new_xyz,
+    const size_t N,
+    const size_t orig_N) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N) {
+        return;
+    }
+
+    // Copy selected elements to new tensors, at positions after the original elements
+    const int64_t index = indices[idx];
+    const int64_t dest_idx = orig_N + idx;
+
+    new_xyz[dest_idx * 3] = xyz[index * 3];
+    new_xyz[dest_idx * 3 + 1] = xyz[index * 3 + 1];
+    new_xyz[dest_idx * 3 + 2] = xyz[index * 3 + 2];
+    new_xyz[dest_idx * 3 + 3] = xyz[index * 3 + 3];
+}
+
 __global__ void concat_2dim_kernel(
     const float* __restrict__ src,
     const int64_t* __restrict__ indices,
@@ -280,27 +301,6 @@ __global__ void concat_2dim_kernel(
     for (long i = 0; i < dim1; i++) {
         dst[dest_idx * dim1 + i] = src[index * dim1 + i];
     }
-}
-
-__global__ void concat_4dim_kernel(
-    const float* __restrict__ xyz,
-    const int64_t* __restrict__ indices,
-    float* __restrict__ new_xyz,
-    const size_t N,
-    const size_t orig_N) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N) {
-        return;
-    }
-
-    // Copy selected elements to new tensors, at positions after the original elements
-    const int64_t index = indices[idx];
-    const int64_t dest_idx = orig_N + idx;
-
-    new_xyz[dest_idx * 3] = xyz[index * 3];
-    new_xyz[dest_idx * 3 + 1] = xyz[index * 3 + 1];
-    new_xyz[dest_idx * 3 + 2] = xyz[index * 3 + 2];
-    new_xyz[dest_idx * 3 + 3] = xyz[index * 3 + 3];
 }
 
 __global__ void concat_selection_float3_kernel(
@@ -562,40 +562,37 @@ void select_elements_and_cat(
         cudaStreamCreate(&stream6);
 
         copy2DAsync(xyz, xyz_size, new_xyz, stream1);
-        //        auto* xyz3_ptr = reinterpret_cast<float3*>(static_cast<float*>(xyz.data_ptr<float>()));
-        //        auto* new_xyz3_ptr = reinterpret_cast<float3*>(static_cast<float*>(new_xyz.data_ptr<float>()));
-        concat_2dim_kernel<<<blocks, threads, 0, stream1>>>(
-            xyz,
+        const auto* xyz3_ptr = reinterpret_cast<const float3*>(xyz);
+        auto* new_xyz3_ptr = reinterpret_cast<float3*>(new_xyz);
+        concat_selection_float3_kernel<<<blocks, threads, 0, stream1>>>(
+            xyz3_ptr,
             indices,
-            new_xyz,
-            xyz_size[0],
-            xyz_size[1],
-            extension_size, xyz_size[0]);
+            new_xyz3_ptr,
+            extension_size,
+            xyz_size[0]);
         CHECK_LAST_CUDA_ERROR();
         copy2DAsync(scaling, scaling_size, new_scaling, stream2);
-        //        auto* scaling3_ptr = reinterpret_cast<float3*>(static_cast<float*>(scaling.data_ptr<float>()));
-        //        auto* new_scaling3_ptr = reinterpret_cast<float3*>(static_cast<float*>(new_scaling.data_ptr<float>()));
-        concat_2dim_kernel<<<blocks, threads, 0, stream2>>>(
-            scaling,
+        const auto* scaling3_ptr = reinterpret_cast<const float3*>(scaling);
+        auto* new_scaling3_ptr = reinterpret_cast<float3*>(new_scaling);
+        concat_selection_float3_kernel<<<blocks, threads, 0, stream2>>>(
+            scaling3_ptr,
             indices,
-            new_scaling,
-            scaling_size[0],
-            scaling_size[1],
-            extension_size, scaling_size[0]);
+            new_scaling3_ptr,
+            extension_size,
+            scaling_size[0]);
         CHECK_LAST_CUDA_ERROR();
         copy3DAsync(features_dc, features_dc_size, new_features_dc, new_features_dc_size, stream3);
         copy3DAsync(features_rest, features_rest_size, new_features_rest, new_features_rest_size, stream5);
         copy2DAsync(opacity, opacity_size, new_opacity, stream4);
         copy2DAsync(rotation, rotation_size, new_rotation, stream6);
-        //        auto* rotation_ptr = reinterpret_cast<float4*>(static_cast<float*>(rotation.data_ptr<float>()));
-        //        auto* new_rotation_ptr = reinterpret_cast<float4*>(static_cast<float*>(rotation.data_ptr<float>()));
-        concat_2dim_kernel<<<blocks, threads, 0, stream6>>>(
-            rotation,
+        auto* rotation_ptr = reinterpret_cast<const float4*>(rotation);
+        auto* new_rotation_ptr = reinterpret_cast<float4*>(new_rotation);
+        concat_selection_float4_kernel<<<blocks, threads, 0, stream6>>>(
+            rotation_ptr,
             indices,
-            new_rotation,
-            rotation_size[0],
-            rotation_size[1],
-            extension_size, rotation_size[0]);
+            new_rotation_ptr,
+            extension_size,
+            rotation_size[0]);
 
         CHECK_LAST_CUDA_ERROR();
         cudaStreamSynchronize(stream1);
