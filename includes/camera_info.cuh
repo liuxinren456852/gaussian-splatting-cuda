@@ -4,12 +4,12 @@
 #include "camera_utils.cuh"
 #include <algorithm>
 #pragma diag_suppress code_of_warning
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #pragma diag_default code_of_warning
 #include <filesystem>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <vector>
-#include <fstream>
 
 enum class CAMERA_MODEL {
     SIMPLE_PINHOLE = 0,

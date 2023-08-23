@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.22)
+﻿cmake_minimum_required(VERSION 3.24)
 project(gaussian_splatting_cuda LANGUAGES CUDA CXX)
 
 # Determine the project root directory
@@ -11,6 +11,7 @@ set(LIBTORCH_DIR "${PROJ_ROOT_DIR}/external/libtorch")
 set(CMAKE_PREFIX_PATH ${LIBTORCH_DIR})
 
 #set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch=sm_89 -gencode=arch=compute_89,code=sm_89 -gencode=arch=compute_89,code=compute_89")
+
 # --------------------------------------
 # Core count calculation
 # --------------------------------------
@@ -34,6 +35,7 @@ set(HEADERS
         includes/read_utils.cuh
         includes/gaussian.cuh
         includes/camera.cuh
+        includes/loss_monitor.cuh
         includes/image.cuh
         includes/stb_image.h
         includes/point_cloud.cuh
@@ -62,6 +64,7 @@ set(SOURCES
         src/read_utils.cu
         src/gaussian.cu
         src/camera.cu
+        src/loss_monitor.cu
         src/image.cu
         src/scene.cu
         src/camera_utils.cu
@@ -83,7 +86,7 @@ set_source_files_properties(src/utils.cu PROPERTIES COMPILE_FLAGS "-Xcudafe --di
 add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
-        #CUDA_ARCHITECTURES 89
+        CUDA_ARCHITECTURES native
         CUDA_STANDARD 17
         CUDA_STANDARD_REQUIRED ON
         CXX_STANDARD 17
@@ -116,8 +119,8 @@ find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
 
 # Check CUDA version
-if (CUDAToolkit_VERSION VERSION_LESS "12.2")
-    message(FATAL_ERROR "This project requires CUDA 12.0 or higher")
+if (CUDAToolkit_VERSION VERSION_LESS "11.7")
+    message(FATAL_ERROR "This project requires CUDA 11.7 or higher")
 endif ()
 
 find_package(PythonLibs REQUIRED)
@@ -145,6 +148,7 @@ target_link_libraries(${PROJECT_NAME}
         nlohmann_json::nlohmann_json
         glm
         Threads::Threads
+        args
 )
 
 # --------------------------------------
@@ -194,7 +198,7 @@ if(BUILD_TESTS)
     add_executable(testing ${TEST_SOURCES})
 
     set_target_properties(testing PROPERTIES
-            CUDA_ARCHITECTURES 89
+            CUDA_ARCHITECTURES native
             CUDA_STANDARD 17
             CUDA_STANDARD_REQUIRED ON
             CXX_STANDARD 17

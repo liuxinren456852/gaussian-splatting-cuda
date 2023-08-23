@@ -21,12 +21,14 @@ struct OptimizationParameters {
     uint64_t densify_from_iter = 500;
     uint64_t densify_until_iter = 15'000;
     float densify_grad_threshold = 0.0002f;
+    bool early_stopping = false;
+    float convergence_threshold = 0.007f;
 };
 
 struct ModelParameters {
     int sh_degree = 3;
     std::filesystem::path source_path = "";
-    std::filesystem::path model_path = "output";
+    std::filesystem::path output_path = "output";
     std::string images = "images";
     int resolution = -1;
     bool white_background = false;
