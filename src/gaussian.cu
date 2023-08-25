@@ -16,6 +16,7 @@ GaussianModel::GaussianModel(int sh_degree) : _max_sh_degree(sh_degree) {
 }
 
 GaussianModel::~GaussianModel() {
+    std::cout << "GaussianModel::~GaussianModel()" << std::endl;
     cudaStreamDestroy(_stream1);
     cudaStreamDestroy(_stream2);
     cudaStreamDestroy(_stream3);
@@ -67,9 +68,13 @@ void GaussianModel::One_up_sh_degree() {
 void GaussianModel::Create_from_pcd(PointCloud& pcd, float spatial_lr_scale) {
     _spatial_lr_scale = spatial_lr_scale;
 
-    // coordinates
-    auto pointType = torch::TensorOptions().dtype(torch::kFloat32);
-    _xyz = torch::from_blob(pcd._points.data(), {static_cast<long>(pcd._points.size()), 3}, pointType);
+    const auto pointType = torch::TensorOptions().dtype(torch::kFloat32);
+    _xyz = torch::from_blob(pcd._points.data(), {static_cast<long>(pcd._points.size()), 3}, pointType).to(torch::kCUDA).set_requires_grad(true);
+    auto dist2 = torch::clamp_min(distCUDA2(_xyz), 0.0000001);
+    _scaling = torch::log(torch::sqrt(dist2)).unsqueeze(-1).repeat({1, 3}).to(torch::kCUDA, true).set_requires_grad(true);
+    _rotation = torch::zeros({_xyz.size(0), 4}).index_put_({torch::indexing::Slice(), 0}, 1).to(torch::kCUDA, true).set_requires_grad(true);
+    _opacity = inverse_sigmoid(0.5 * torch::ones({_xyz.size(0), 1})).to(torch::kCUDA, true).set_requires_grad(true);
+    _max_radii2D = torch::zeros({_xyz.size(0)}).to(torch::kCUDA, true);
 
     // colors
     auto colorType = torch::TensorOptions().dtype(torch::kUInt8);
@@ -79,24 +84,8 @@ void GaussianModel::Create_from_pcd(PointCloud& pcd, float spatial_lr_scale) {
     auto features = torch::zeros({fused_color.size(0), 3, static_cast<long>(std::pow((_max_sh_degree + 1), 2))}).to(torch::kCUDA);
     features.index_put_({torch::indexing::Slice(), torch::indexing::Slice(torch::indexing::None, 3), 0}, fused_color);
     features.index_put_({torch::indexing::Slice(), torch::indexing::Slice(3, torch::indexing::None), torch::indexing::Slice(1, torch::indexing::None)}, 0.0);
-    _features_dc = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(0, 1)}).transpose(1, 2).contiguous();
-    _features_rest = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None)}).transpose(1, 2).contiguous();
-
-    auto dist2 = torch::clamp_min(distCUDA2(torch::from_blob(pcd._points.data(), {static_cast<long>(pcd._points.size()), 3}, pointType).to(torch::kCUDA)), 0.0000001);
-
-    _scaling = torch::log(torch::sqrt(dist2)).unsqueeze(-1).repeat({1, 3});
-    _rotation = torch::zeros({_xyz.size(0), 4}).index_put_({torch::indexing::Slice(), 0}, 1);
-    _opacity = inverse_sigmoid(0.5 * torch::ones({_xyz.size(0), 1}));
-
-    // Move to GPU and set requires_grad to true
-    _xyz = _xyz.to(torch::kCUDA).set_requires_grad(true);
-    _features_dc = _features_dc.to(torch::kCUDA).set_requires_grad(true);
-    _features_rest = _features_rest.to(torch::kCUDA).set_requires_grad(true);
-    _scaling = _scaling.to(torch::kCUDA).set_requires_grad(true);
-    _rotation = _rotation.to(torch::kCUDA).set_requires_grad(true);
-    _opacity = _opacity.to(torch::kCUDA).set_requires_grad(true);
-
-    _max_radii2D = torch::zeros({_xyz.size(0)}).to(torch::kCUDA);
+    _features_dc = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(0, 1)}).transpose(1, 2).contiguous().set_requires_grad(true);
+    _features_rest = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None)}).transpose(1, 2).contiguous().set_requires_grad(true);
 }
 
 /**
@@ -177,7 +166,6 @@ void GaussianModel::prune_points(torch::Tensor mask) {
     // reverse to keep points
     auto valid_point_mask = ~mask;
     int true_count = valid_point_mask.sum().item<int>();
-    std::cout << "Pruning " << true_count << " points" << std::endl;
     auto indices = torch::nonzero(valid_point_mask == true).index({torch::indexing::Slice(torch::indexing::None, torch::indexing::None), torch::indexing::Slice(torch::indexing::None, 1)}).squeeze(-1);
     prune_optimizer(_optimizer.get(), indices, _xyz, 0);
     prune_optimizer(_optimizer.get(), indices, _features_dc, 1);
@@ -197,17 +185,23 @@ void tensors_to_optimizer_new(torch::optim::Adam* optimizer,
                               torch::Tensor& exp_avg,
                               torch::Tensor exp_avg_sq,
                               int param_position) {
+    std::cout << "tensors_to_optimizer_new" << std::endl;
     auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
         *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
+    std::cout << "optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()))";
     optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
 
-    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    std::cout << "exp_avg";
     adamParamStates->exp_avg(exp_avg);
+    std::cout << "exp_avg_sq";
     adamParamStates->exp_avg_sq(exp_avg_sq);
 
-    optimizer->param_groups()[param_position].params()[0] = extended_tensor.set_requires_grad(true);
+    std::cout << "optimizer->param_groups()[param_position].params()[0]";
+    optimizer->param_groups()[param_position].params()[0] = extended_tensor.clone().set_requires_grad(true);
+    std::cout << "old_tensor";
     old_tensor = optimizer->param_groups()[param_position].params()[0];
 
+    std::cout << "optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]";
     optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
 }
 
@@ -519,18 +513,6 @@ void GaussianModel::select_elements_and_cat(
     const float* rotation,
     const std::vector<long>& rotation_size,
     int64_t* indices,
-    float* new_xyz,
-    const std::vector<long>& new_xyz_size,
-    float* new_features_dc,
-    const std::vector<long>& new_features_dc_size,
-    float* new_features_rest,
-    const std::vector<long>& new_features_rest_size,
-    float* new_opacity,
-    const std::vector<long>& new_opacity_size,
-    float* new_scaling,
-    const std::vector<long>& new_scaling_size,
-    float* new_rotation,
-    const std::vector<long>& new_rotation_size,
     long F1,
     long F2,
     long F3,
@@ -548,8 +530,16 @@ void GaussianModel::select_elements_and_cat(
         const auto& rotation_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[4].params()[0].unsafeGetTensorImpl())]);
         const auto& opacity_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl())]);
 
-        const int total_extension_count = original_size + extension_size;
         const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+        auto new_xyz = torch::zeros({_xyz.size(0) + extension_size, _xyz.size(0)}, options);
+        ts::print_debug_info(new_xyz, "Before tensor_to_optimizer_new: new_xyz");
+        auto new_features_dc = torch::zeros({original_size + extension_size, F1, F2}, options);
+        auto new_features_rest = torch::zeros({original_size + extension_size, F1, F3}, options);
+        auto new_opacity = torch::zeros({original_size + extension_size, 1}, options);
+        auto new_scaling = torch::zeros({original_size + extension_size, 3}, options);
+        auto new_rotation = torch::zeros({original_size + extension_size, 4}, options);
+
+        const int total_extension_count = original_size + extension_size;
         auto xyz_exp_avg = torch::zeros({total_extension_count, 3}, options);
         auto xyz_exp_avg_sq = torch::zeros({total_extension_count, 3}, options);
         auto features_dc_avg = torch::zeros({total_extension_count, _features_dc.size(1), _features_dc.size(2)}, options);
@@ -563,65 +553,100 @@ void GaussianModel::select_elements_and_cat(
         auto rotation_avg = torch::zeros({total_extension_count, 4}, options);
         auto rotation_avg_sq = torch::zeros({total_extension_count, 4}, options);
 
-        copy2DAsync(xyz_exp_avg.data_ptr<float>(), {original_size, 3}, xyz_paramstates.exp_avg().data_ptr<float>(), _stream1);
-        copy2DAsync(xyz_exp_avg_sq.data_ptr<float>(), {original_size, 3}, xyz_paramstates.exp_avg_sq().data_ptr<float>(), _stream2);
+        //        std::cout << "async xyz_paramstates.exp_avg()" << std::endl;
+        //        copy2DAsync(xyz_paramstates.exp_avg().data_ptr<float>(), {original_size, 3}, xyz_exp_avg.data_ptr<float>(), _stream1);
+        //        CHECK_LAST_CUDA_ERROR();
+        //        std::cout << "async xyz_paramstates.exp_avg_sq()" << std::endl;
+        //        copy2DAsync(xyz_paramstates.exp_avg_sq().data_ptr<float>(), {original_size, 3}, xyz_exp_avg_sq.data_ptr<float>(), _stream1);
+        //        CHECK_LAST_CUDA_ERROR();
 
-        copy3DAsync(features_dc_paramstates.exp_avg().data_ptr<float>(), features_dc_size, features_dc_avg.data_ptr<float>(), new_features_dc_size, _stream3);
-        copy3DAsync(features_dc_paramstates.exp_avg_sq().data_ptr<float>(), features_dc_size, features_dc_avg_sq.data_ptr<float>(), new_features_dc_size, _stream4);
+        std::cout << "async features_dc_paramstates.exp_avg()" << std::endl;
+        copy3DAsync(features_dc_paramstates.exp_avg().data_ptr<float>(), features_dc_size, features_dc_avg.data_ptr<float>(), {original_size + extension_size, F1, F2}, _stream3);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "async features_dc_paramstates.exp_avg_sq()" << std::endl;
+        copy3DAsync(features_dc_paramstates.exp_avg_sq().data_ptr<float>(), features_dc_size, features_dc_avg_sq.data_ptr<float>(), {original_size + extension_size, F1, F2}, _stream4);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy3DAsync(features_rest_paramstates.exp_avg().data_ptr<float>(), features_rest_size, features_rest_avg.data_ptr<float>(), new_features_rest_size, _stream5);
-        copy3DAsync(features_rest_paramstates.exp_avg_sq().data_ptr<float>(), features_rest_size, features_rest_avg_sq.data_ptr<float>(), new_features_rest_size, _stream6);
+        std::cout << "async features_rest_paramstates.exp_avg()" << std::endl;
+        copy3DAsync(features_rest_paramstates.exp_avg().data_ptr<float>(), features_rest_size, features_rest_avg.data_ptr<float>(), {original_size + extension_size, F1, F3}, _stream5);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "async features_rest_paramstates.exp_avg_sq()" << std::endl;
+        copy3DAsync(features_rest_paramstates.exp_avg_sq().data_ptr<float>(), features_rest_size, features_rest_avg_sq.data_ptr<float>(), {original_size + extension_size, F1, F3}, _stream6);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy2DAsync(opacity_avg.data_ptr<float>(), {original_size, 1}, opacity_paramstates.exp_avg().data_ptr<float>(), _stream1);
-        copy2DAsync(opacity_avg_sq.data_ptr<float>(), {original_size, 1}, opacity_paramstates.exp_avg_sq().data_ptr<float>(), _stream2);
+        std::cout << "async opacity_paramstates.exp_avg()" << std::endl;
+        copy2DAsync(opacity_paramstates.exp_avg().data_ptr<float>(), {original_size, 1}, opacity_avg.data_ptr<float>(), _stream1);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "async opacity_paramstates.exp_avg_sq()" << std::endl;
+        copy2DAsync(opacity_paramstates.exp_avg_sq().data_ptr<float>(), {original_size, 1}, opacity_avg_sq.data_ptr<float>(), _stream2);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy2DAsync(scaling_avg.data_ptr<float>(), {original_size, 3}, scaling_paramstates.exp_avg().data_ptr<float>(), _stream3);
-        copy2DAsync(scaling_avg_sq.data_ptr<float>(), {original_size, 3}, scaling_paramstates.exp_avg_sq().data_ptr<float>(), _stream4);
+        std::cout << "async scaling_paramstates.exp_avg()" << std::endl;
+        copy2DAsync(scaling_paramstates.exp_avg().data_ptr<float>(), {original_size, 3}, scaling_avg.data_ptr<float>(), _stream3);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "async scaling_paramstates.exp_avg_sq()" << std::endl;
+        copy2DAsync(scaling_paramstates.exp_avg_sq().data_ptr<float>(), {original_size, 3}, scaling_avg_sq.data_ptr<float>(), _stream4);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy2DAsync(rotation_avg.data_ptr<float>(), {original_size, 4}, rotation_paramstates.exp_avg().data_ptr<float>(), _stream5);
-        copy2DAsync(rotation_avg_sq.data_ptr<float>(), {original_size, 4}, rotation_paramstates.exp_avg_sq().data_ptr<float>(), _stream6);
+        std::cout << "async rotation_paramstates.exp_avg()" << std::endl;
+        copy2DAsync(rotation_paramstates.exp_avg().data_ptr<float>(), {original_size, 4}, rotation_avg.data_ptr<float>(), _stream5);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "async rotation_paramstates.exp_avg_sq()" << std::endl;
+        copy2DAsync(rotation_paramstates.exp_avg_sq().data_ptr<float>(), {original_size, 4}, rotation_avg_sq.data_ptr<float>(), _stream6);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy2DAsync(xyz, xyz_size, new_xyz, _stream1);
+        copy2DAsync(xyz, xyz_size, new_xyz.data_ptr<float>(), _stream1);
+        ts::print_debug_info(new_xyz, "Before concat_selection_float3_kernel: new_xyz");
+        CHECK_LAST_CUDA_ERROR();
         const auto* xyz3_ptr = reinterpret_cast<const float3*>(xyz);
-        auto* new_xyz3_ptr = reinterpret_cast<float3*>(new_xyz);
+        auto* new_xyz3_ptr = reinterpret_cast<float3*>(new_xyz.data_ptr<float>());
         concat_selection_float3_kernel<<<blocks, threads, 0, _stream1>>>(
             xyz3_ptr,
             indices,
             new_xyz3_ptr,
             extension_size,
             xyz_size[0]);
+        CHECK_LAST_CUDA_ERROR();
+        ts::print_debug_info(new_xyz, "After concat_selection_float3_kernel: new_xyz");
 
-        copy2DAsync(scaling, scaling_size, new_scaling, _stream2);
+        copy2DAsync(scaling, scaling_size, new_scaling.data_ptr<float>(), _stream2);
+        CHECK_LAST_CUDA_ERROR();
         const auto* scaling3_ptr = reinterpret_cast<const float3*>(scaling);
-        auto* new_scaling3_ptr = reinterpret_cast<float3*>(new_scaling);
+        auto* new_scaling3_ptr = reinterpret_cast<float3*>(new_scaling.data_ptr<float>());
         concat_selection_float3_kernel<<<blocks, threads, 0, _stream2>>>(
             scaling3_ptr,
             indices,
             new_scaling3_ptr,
             extension_size,
             scaling_size[0]);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy3DAsync(features_dc, features_dc_size, new_features_dc, new_features_dc_size, _stream3);
+        copy3DAsync(features_dc, features_dc_size, new_features_dc.data_ptr<float>(), {original_size + extension_size, F1, F2}, _stream3);
+        CHECK_LAST_CUDA_ERROR();
         const auto* features_dc_ptr = reinterpret_cast<const float3*>(features_dc);
-        auto* new_features_dc_ptr = reinterpret_cast<float3*>(new_features_dc);
+        auto* new_features_dc_ptr = reinterpret_cast<float3*>(new_features_dc.data_ptr<float>());
         concat_elements_kernel_features_dc<<<blocks, threads, 0, _stream3>>>(
             features_dc_ptr,
             indices,
             new_features_dc_ptr,
             extension_size,
             xyz_size[0], F1);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy2DAsync(opacity, opacity_size, new_opacity, _stream4);
+        copy2DAsync(opacity, opacity_size, new_opacity.data_ptr<float>(), _stream4);
+        CHECK_LAST_CUDA_ERROR();
         concat_elements_kernel_opacity<<<blocks, threads, 0, _stream4>>>(
             opacity,
             indices,
-            new_opacity,
+            new_opacity.data_ptr<float>(),
             extension_size,
             xyz_size[0]);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy3DAsync(features_rest, features_rest_size, new_features_rest, new_features_rest_size, _stream5);
+        copy3DAsync(features_rest, features_rest_size, new_features_rest.data_ptr<float>(), {original_size + extension_size, F1, F3}, _stream5);
+        CHECK_LAST_CUDA_ERROR();
         const auto* features_rest_ptr = reinterpret_cast<const float3*>(features_rest);
-        auto* new_features_rest_ptr = reinterpret_cast<float3*>(new_features_rest);
+        auto* new_features_rest_ptr = reinterpret_cast<float3*>(new_features_rest.data_ptr<float>());
         concat_elements_kernel_features_rest<<<blocks, threads, 0, _stream5>>>(
             features_rest_ptr,
             indices,
@@ -629,29 +654,57 @@ void GaussianModel::select_elements_and_cat(
             extension_size,
             xyz_size[0],
             F1, F3);
+        CHECK_LAST_CUDA_ERROR();
 
-        copy2DAsync(rotation, rotation_size, new_rotation, _stream6);
+        copy2DAsync(rotation, rotation_size, new_rotation.data_ptr<float>(), _stream6);
+        CHECK_LAST_CUDA_ERROR();
         auto* rotation_ptr = reinterpret_cast<const float4*>(rotation);
-        auto* new_rotation_ptr = reinterpret_cast<float4*>(new_rotation);
+        auto* new_rotation_ptr = reinterpret_cast<float4*>(new_rotation.data_ptr<float>());
         concat_selection_float4_kernel<<<blocks, threads, 0, _stream6>>>(
             rotation_ptr,
             indices,
             new_rotation_ptr,
             extension_size,
             rotation_size[0]);
+        CHECK_LAST_CUDA_ERROR();
 
-        cudaStreamSynchronize(_stream1);
-        cudaStreamSynchronize(_stream2);
-        cudaStreamSynchronize(_stream3);
-        cudaStreamSynchronize(_stream4);
-        cudaStreamSynchronize(_stream5);
-        cudaStreamSynchronize(_stream6);
-        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_xyz), _xyz, xyz_exp_avg, xyz_exp_avg_sq, 0);
-        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_features_dc), _features_dc, features_dc_avg, features_dc_avg_sq, 1);
-        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_features_rest), _features_rest, features_rest_avg, features_rest_avg_sq, 2);
-        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_opacity), _opacity, opacity_avg, opacity_avg_sq, 5);
-        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_scaling), _scaling, scaling_avg, scaling_avg_sq, 3);
-        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_rotation), _rotation, rotation_avg, rotation_avg_sq, 4);
+        //        cudaStreamSynchronize(_stream1);
+        //        CHECK_LAST_CUDA_ERROR();
+        //        cudaStreamSynchronize(_stream2);
+        //        CHECK_LAST_CUDA_ERROR();
+        //        cudaStreamSynchronize(_stream3);
+        //        CHECK_LAST_CUDA_ERROR();
+        //        cudaStreamSynchronize(_stream4);
+        //        CHECK_LAST_CUDA_ERROR();
+        //        cudaStreamSynchronize(_stream5);
+        //        CHECK_LAST_CUDA_ERROR();
+        //        cudaStreamSynchronize(_stream6);
+        cudaDeviceSynchronize();
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "After cudaStreamSynchronize" << std::endl;
+        std::cout << "xyz_exp_avg" << std::endl;
+        ts::print_debug_info(_xyz, "Before tensor_to_optimizer_new: xyz");
+        ts::print_debug_info(new_xyz, "Before tensor_to_optimizer_new: new_xyz");
+        tensors_to_optimizer_new(_optimizer.get(), new_xyz, _xyz, xyz_exp_avg, xyz_exp_avg_sq, 0);
+        ts::print_debug_info(_xyz, "\nAfter tensor_to_optimizer_new: xyz");
+        ts::print_debug_info(new_xyz, "After tensor_to_optimizer_new: new_xyz");
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "features_dc_exp_avg" << std::endl;
+        tensors_to_optimizer_new(_optimizer.get(), new_features_dc, _features_dc, features_dc_avg, features_dc_avg_sq, 1);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "features_rest_exp_avg" << std::endl;
+        tensors_to_optimizer_new(_optimizer.get(), new_features_rest, _features_rest, features_rest_avg, features_rest_avg_sq, 2);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "opacity_exp_avg" << std::endl;
+        tensors_to_optimizer_new(_optimizer.get(), new_opacity, _opacity, opacity_avg, opacity_avg_sq, 5);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "scaling_exp_avg" << std::endl;
+        tensors_to_optimizer_new(_optimizer.get(), new_scaling, _scaling, scaling_avg, scaling_avg_sq, 3);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "rotation_exp_avg" << std::endl;
+        tensors_to_optimizer_new(_optimizer.get(), new_rotation, _rotation, rotation_avg, rotation_avg_sq, 4);
+        CHECK_LAST_CUDA_ERROR();
+        std::cout << "done!" << std::endl;
     }
 
     std::cout << "After cudaStreamDestory" << std::endl;
@@ -669,14 +722,14 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
 
     auto indices = torch::nonzero(selected_pts_mask.squeeze(-1) == true).index({torch::indexing::Slice(torch::indexing::None, torch::indexing::None), torch::indexing::Slice(torch::indexing::None, 1)}).squeeze(-1);
     const auto extension_count = torch::sum(selected_pts_mask).item<int>();
-    const auto total_extension_count = _xyz.size(0) + extension_count;
-    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
-    torch::Tensor new_xyz = torch::zeros({total_extension_count, 3}, options);
-    torch::Tensor new_features_dc = torch::zeros({total_extension_count, _features_dc.size(1), _features_dc.size(2)}, options);
-    torch::Tensor new_features_rest = torch::zeros({total_extension_count, _features_rest.size(1), _features_rest.size(2)}, options);
-    torch::Tensor new_opacity = torch::zeros({total_extension_count, 1}, options);
-    torch::Tensor new_scaling = torch::zeros({total_extension_count, 3}, options);
-    torch::Tensor new_rotation = torch::zeros({total_extension_count, 4}, options);
+    //    const auto total_extension_count = _xyz.size(0) + extension_count;
+    //    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    //    torch::Tensor new_xyz = torch::zeros({total_extension_count, 3}, options);
+    //    torch::Tensor new_features_dc = torch::zeros({total_extension_count, _features_dc.size(1), _features_dc.size(2)}, options);
+    //    torch::Tensor new_features_rest = torch::zeros({total_extension_count, _features_rest.size(1), _features_rest.size(2)}, options);
+    //    torch::Tensor new_opacity = torch::zeros({total_extension_count, 1}, options);
+    //    torch::Tensor new_scaling = torch::zeros({total_extension_count, 3}, options);
+    //    torch::Tensor new_rotation = torch::zeros({total_extension_count, 4}, options);
     std::cout << "Print extension size: " << extension_count << std::endl;
     const auto F1 = _features_dc.size(1);
     const auto F2 = _features_dc.size(2);
@@ -694,25 +747,20 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
                             _rotation.data_ptr<float>(),
                             {_rotation.size(0), _rotation.size(1)},
                             indices.data_ptr<int64_t>(),
-                            new_xyz.data_ptr<float>(),
-                            {new_xyz.size(0), new_xyz.size(1)},
-                            new_features_dc.data_ptr<float>(),
-                            {new_features_dc.size(0), new_features_dc.size(1), new_features_dc.size(2)},
-                            new_features_rest.data_ptr<float>(),
-                            {new_features_rest.size(0), new_features_rest.size(1), new_features_rest.size(2)},
-                            new_opacity.data_ptr<float>(),
-                            {new_opacity.size(0), new_opacity.size(1)},
-                            new_scaling.data_ptr<float>(),
-                            {new_scaling.size(0), new_scaling.size(1)},
-                            new_rotation.data_ptr<float>(),
-                            {new_rotation.size(0), new_rotation.size(1)},
                             F1, F2, F3,
                             _xyz.size(0),
                             extension_count);
-
+    std::cout << "After select_elements_and_cat" << std::endl;
+    ts::print_debug_info(_xyz, "xyz");
     _xyz_gradient_accum = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
+    std::cout << "After _xyz_gradient_accum" << std::endl;
+    ts::print_debug_info(_xyz, "xyz");
     _denom = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
+    std::cout << "After _denom" << std::endl;
+    ts::print_debug_info(_denom, "xyz");
     _max_radii2D = torch::zeros({_xyz.size(0)}).to(torch::kCUDA);
+    std::cout << "After _max_radii2D" << std::endl;
+    ts::print_debug_info(_max_radii2D, "max_radii2D");
 }
 
 void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float extent, float max_screen_size) {

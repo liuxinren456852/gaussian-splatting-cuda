@@ -7,6 +7,10 @@ I embarked on this project to deepen my understanding of the groundbreaking pape
 
 ## News
 
+- **[2023-08-24]**:
+    - Added updating status line, instead of printing many lines of output during a run
+    - In tools folder there is pre-commit hook to run clang-format before every commit. See Contribution section.
+    - Added -f flag to force overwriting of output folder
 - **[2023-08-23]**: 
   - Command-line parameters have been added to specify the training data path and the output path. Note that the output path will not be automatically overwritten anymore.
   - CUDA version restrictions have been relaxed a bit to 11.7 or higher. The CUDA architecture of the system on which the software is being compiled is now auto-detected automatically.
@@ -49,7 +53,8 @@ While completely unoptimized, the gains in performance, though modest, are notew
 3. CUDA 11.7 or higher (might work with a lower version, has to be manually set and tested).
 4. Python with development headers.
 5. libtorch: You can find the setup instructions in the libtorch section of this README.
-6. Other dependencies will be handled by the CMake script.
+6. TBB
+7. Other dependencies will be handled by the CMake script.
 
 ### Hardware Prerequisites
 1. NVIDIA GPU with CUDA support. Successfully tested so far are RTX 4090, RTX A5000, 3090Ti and A100. With 3080Ti there is an outstanding issue (#21) with larger datasets.
@@ -85,7 +90,10 @@ The `3D Gaussian Splatting CUDA Implementation` provides a suite of command-line
 
 - **-d, --data_path [PATH]**  
   Specify the path to the training data.
-
+ 
+- **-f, --force**  
+    Force overwriting of output folder. If not set, the program will exit if the output folder already exists.
+ 
 - **-o, --output_path [PATH]**  
   Specify the path to save the trained model. If this option is not specified, the trained model will be saved to the "output" folder located in the root directory of the project.
 
@@ -125,17 +133,35 @@ Then, you can view the results with:
 ./SIBR_viewers/install/bin/SIBR_gaussianViewer_app -m output
 ```
 
-## Contribution Guidelines
+## Contributions
+Contributions are welcome! I want to make this a community project.
 
-Thank you for considering a contribution! Below are some guidelines to help ensure our project remains effective and consistent.
+Some ideas for relative straight forward contributions:
+- Revamp the README.
+- Add a proper config file or cmd line config.
+
+I want to get rid of some heavy dependencies:
+- Replace glm with custom matrix operations
+- Replace the few Eigen with some custom matrix operations
+
+Advanced contributions or long term goals:
+- Build a renderer to view training output in real time and to replace SIBR viewer.
+- Look into [gtsfm](https://github.com/borglab/gtsfm) to replace colmap dependency
+- CUDA optimization
+- Build a proper viewer for the training output (maybe with XR support?).
+
+Own ideas are welcome as well!
+
+### Contribution Guidelines
+
+Below are some guidelines to help ensure our project remains effective and consistent.
 
 1. **Getting Started with Contributions**:
     - I've marked several beginner-friendly issues as **good first issues**. If you're new to the project, these are great places to start.
-    - For those looking to contribute something not currently listed as an issue, feel free to create one, or you can direct message me on Twitter for a quick chat. Since there are not many contributors at the moment, I'm happy to discuss your ideas and help you get started.
+    - For those looking to contribute something not currently listed as an issue or propose something in the discussion section. You can direct message me on Twitter for a quick chat. Since there are not many contributors at the moment, I'm happy to discuss your ideas and help you get started.
 
 2. **Before Submitting Your Pull Request**:
-    - Please squash your commits for clarity and to make my life as reviewer way easier.
-    - Ensure you've applied `clang-format` to maintain consistent coding style.
+    - Ensure you've applied `clang-format` to maintain consistent coding style. There is in tools folder a git pre-commit hook. You can just copy it to .git/hooks/pre-commit. It will run clang-format before every commit.
     - We aim to minimize dependencies. If you're introducing a new one, it's essential to raise an issue for discussion first. There are ongoing efforts to reduce the number of dependencies, and your understanding in this area is appreciated.
 
 3. **Key Principles for Contributions**:
@@ -155,32 +181,6 @@ Here is random collection of things that have to be described in README later on
 - Needed for simple-knn: 
 ```bash sudo apt-get install python3-dev ```
  
-
-## TODO (in no particular order, reminders for myself)
-- [ ] Speed up with shifting stuff to CUDA.
-- [ ] Need to think about the cameras. Separating camera and camera_info seems useless.
-- [ ] Proper logging. (Lets see, low prio)
-- [ ] Proper config file or cmd line config.
-
-## Contributions
-Contributions are welcome! I want to make this a community project. 
-
-Some ideas for relative straight forward contributions:
-- Revamp the README.
-- Add a proper config file or cmd line config.
-
-I want to get rid of some heavy dependencies:
-- Replace glm with custom matrix operations
-- Replace the few Eigen with some custom matrix operations
-
-Advanced contributions:
-- Build a renderer to view training output in real time and to replace SIBR viewer.
-- Look into [gtsfm](https://github.com/borglab/gtsfm) to replace colmap dependency
-- CUDA optimization
-- ...
-
-Own ideas are welcome as well!
-
 ## Citation and References
 If you utilize this software or present results obtained using it, please reference the original work:
 
