@@ -78,9 +78,6 @@ private:
         const float* rotation,
         const std::vector<long>& rotation_size,
         int64_t* indices,
-        long F1,
-        long F2,
-        long F3,
         long original_size,
         long extension_size);
 
