@@ -190,6 +190,27 @@ void GaussianModel::prune_points(torch::Tensor mask) {
     _denom = _denom.index_select(0, indices);
     _max_radii2D = _max_radii2D.index_select(0, indices);
 }
+
+void tensors_to_optimizer_new(torch::optim::Adam* optimizer,
+                              torch::Tensor& extended_tensor,
+                              torch::Tensor& old_tensor,
+                              torch::Tensor& exp_avg,
+                              torch::Tensor exp_avg_sq,
+                              int param_position) {
+    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
+        *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
+    optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
+
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    adamParamStates->exp_avg(exp_avg);
+    adamParamStates->exp_avg_sq(exp_avg_sq);
+
+    optimizer->param_groups()[param_position].params()[0] = extended_tensor.set_requires_grad(true);
+    old_tensor = optimizer->param_groups()[param_position].params()[0];
+
+    optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
+}
+
 void tensors_to_optimizer(torch::optim::Adam* optimizer,
                           torch::Tensor& extended_tensor,
                           torch::Tensor& old_tensor,
@@ -519,6 +540,47 @@ void GaussianModel::select_elements_and_cat(
     long threads = 512;
     long blocks = std::max(1L, (extension_size + threads - 1L) / threads);
     {
+
+        const auto& xyz_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[0].params()[0].unsafeGetTensorImpl())]);
+        const auto& features_dc_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[1].params()[0].unsafeGetTensorImpl())]);
+        const auto& features_rest_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[2].params()[0].unsafeGetTensorImpl())]);
+        const auto& scaling_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[3].params()[0].unsafeGetTensorImpl())]);
+        const auto& rotation_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[4].params()[0].unsafeGetTensorImpl())]);
+        const auto& opacity_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl())]);
+
+        const int total_extension_count = original_size + extension_size;
+        const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+        auto xyz_exp_avg = torch::zeros({total_extension_count, 3}, options);
+        auto xyz_exp_avg_sq = torch::zeros({total_extension_count, 3}, options);
+        auto features_dc_avg = torch::zeros({total_extension_count, _features_dc.size(1), _features_dc.size(2)}, options);
+        auto features_dc_avg_sq = torch::zeros({total_extension_count, _features_dc.size(1), _features_dc.size(2)}, options);
+        auto features_rest_avg = torch::zeros({total_extension_count, _features_rest.size(1), _features_rest.size(2)}, options);
+        auto features_rest_avg_sq = torch::zeros({total_extension_count, _features_rest.size(1), _features_rest.size(2)}, options);
+        auto opacity_avg = torch::zeros({total_extension_count, 1}, options);
+        auto opacity_avg_sq = torch::zeros({total_extension_count, 1}, options);
+        auto scaling_avg = torch::zeros({total_extension_count, 3}, options);
+        auto scaling_avg_sq = torch::zeros({total_extension_count, 3}, options);
+        auto rotation_avg = torch::zeros({total_extension_count, 4}, options);
+        auto rotation_avg_sq = torch::zeros({total_extension_count, 4}, options);
+
+        copy2DAsync(xyz_exp_avg.data_ptr<float>(), {original_size, 3}, xyz_paramstates.exp_avg().data_ptr<float>(), _stream1);
+        copy2DAsync(xyz_exp_avg_sq.data_ptr<float>(), {original_size, 3}, xyz_paramstates.exp_avg_sq().data_ptr<float>(), _stream2);
+
+        copy3DAsync(features_dc_paramstates.exp_avg().data_ptr<float>(), features_dc_size, features_dc_avg.data_ptr<float>(), new_features_dc_size, _stream3);
+        copy3DAsync(features_dc_paramstates.exp_avg_sq().data_ptr<float>(), features_dc_size, features_dc_avg_sq.data_ptr<float>(), new_features_dc_size, _stream4);
+
+        copy3DAsync(features_rest_paramstates.exp_avg().data_ptr<float>(), features_rest_size, features_rest_avg.data_ptr<float>(), new_features_rest_size, _stream5);
+        copy3DAsync(features_rest_paramstates.exp_avg_sq().data_ptr<float>(), features_rest_size, features_rest_avg_sq.data_ptr<float>(), new_features_rest_size, _stream6);
+
+        copy2DAsync(opacity_avg.data_ptr<float>(), {original_size, 1}, opacity_paramstates.exp_avg().data_ptr<float>(), _stream1);
+        copy2DAsync(opacity_avg_sq.data_ptr<float>(), {original_size, 1}, opacity_paramstates.exp_avg_sq().data_ptr<float>(), _stream2);
+
+        copy2DAsync(scaling_avg.data_ptr<float>(), {original_size, 3}, scaling_paramstates.exp_avg().data_ptr<float>(), _stream3);
+        copy2DAsync(scaling_avg_sq.data_ptr<float>(), {original_size, 3}, scaling_paramstates.exp_avg_sq().data_ptr<float>(), _stream4);
+
+        copy2DAsync(rotation_avg.data_ptr<float>(), {original_size, 4}, rotation_paramstates.exp_avg().data_ptr<float>(), _stream5);
+        copy2DAsync(rotation_avg_sq.data_ptr<float>(), {original_size, 4}, rotation_paramstates.exp_avg_sq().data_ptr<float>(), _stream6);
+
         copy2DAsync(xyz, xyz_size, new_xyz, _stream1);
         const auto* xyz3_ptr = reinterpret_cast<const float3*>(xyz);
         auto* new_xyz3_ptr = reinterpret_cast<float3*>(new_xyz);
@@ -584,7 +646,14 @@ void GaussianModel::select_elements_and_cat(
         cudaStreamSynchronize(_stream4);
         cudaStreamSynchronize(_stream5);
         cudaStreamSynchronize(_stream6);
+        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_xyz), _xyz, xyz_exp_avg, xyz_exp_avg_sq, 0);
+        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_features_dc), _features_dc, features_dc_avg, features_dc_avg_sq, 1);
+        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_features_rest), _features_rest, features_rest_avg, features_rest_avg_sq, 2);
+        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_opacity), _opacity, opacity_avg, opacity_avg_sq, 5);
+        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_scaling), _scaling, scaling_avg, scaling_avg_sq, 3);
+        tensors_to_optimizer_new(_optimizer.get(), reinterpret_cast<torch::Tensor&>(new_rotation), _rotation, rotation_avg, rotation_avg_sq, 4);
     }
+
     std::cout << "After cudaStreamDestory" << std::endl;
     CHECK_LAST_CUDA_ERROR();
 }
@@ -612,12 +681,6 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
     const auto F1 = _features_dc.size(1);
     const auto F2 = _features_dc.size(2);
     const auto F3 = _features_rest.size(2);
-    //    ts::print_debug_info(_xyz, "xyz");
-    //    ts::print_debug_info(_features_dc, "features_dc");
-    //    ts::print_debug_info(_features_rest, "features_rest");
-    //    ts::print_debug_info(_opacity, "opacity");
-    //    ts::print_debug_info(_scaling, "scaling");
-    //    ts::print_debug_info(_rotation, "rotation");
     select_elements_and_cat(_xyz.data_ptr<float>(),
                             {_xyz.size(0), _xyz.size(1)},
                             _features_dc.data_ptr<float>(),
@@ -646,16 +709,6 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
                             F1, F2, F3,
                             _xyz.size(0),
                             extension_count);
-
-    tensors_to_optimizer(_optimizer.get(), new_xyz, _xyz, {extension_count, _xyz.size(1)}, 0);
-    tensors_to_optimizer(_optimizer.get(), new_features_dc, _features_dc, {extension_count, _features_dc.size(1), _features_dc.size(2)}, 1);
-    tensors_to_optimizer(_optimizer.get(), new_features_rest, _features_rest, {extension_count, _features_rest.size(1), _features_rest.size(2)}, 2);
-    tensors_to_optimizer(_optimizer.get(), new_scaling, _scaling, {extension_count, _scaling.size(1)}, 3);
-    tensors_to_optimizer(_optimizer.get(), new_rotation, _rotation, {extension_count, _rotation.size(1)}, 4);
-    tensors_to_optimizer(_optimizer.get(), new_opacity, _opacity, {extension_count, _opacity.size(1)}, 5);
-
-    ts::print_debug_info(_xyz, "xyz after");
-    ts::print_debug_info(new_xyz, "new_xyz after");
 
     _xyz_gradient_accum = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
     _denom = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
