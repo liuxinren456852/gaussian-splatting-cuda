@@ -81,8 +81,8 @@ namespace ts {
 
 } // namespace ts
 
-//#undef DEBUG_ERRORS
-#define DEBUG_ERRORS
+#undef DEBUG_ERRORS
+//#define DEBUG_ERRORS
 
 #define CHECK_CUDA_ERROR(val) check((val), #val, __FILE__, __LINE__)
 template <typename T>
