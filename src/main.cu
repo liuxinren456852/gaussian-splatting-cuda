@@ -6,6 +6,7 @@
 #include "render_utils.cuh"
 #include "scene.cuh"
 #include <args.hxx>
+#include <c10/cuda/CUDACachingAllocator.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -46,8 +47,7 @@ std::vector<int> get_random_indices(int max_index) {
 
 int parse_cmd_line_args(const std::vector<std::string>& args,
                         ModelParameters& modelParams,
-                        OptimizationParameters& optimParams,
-                        PipelineParameters& pipelineParams) {
+                        OptimizationParameters& optimParams) {
     if (args.empty()) {
         std::cerr << "No command line arguments provided!" << std::endl;
         return -1;
@@ -58,6 +58,7 @@ int parse_cmd_line_args(const std::vector<std::string>& args,
     args::ValueFlag<float> convergence_rate(parser, "convergence_rate", "Set convergence rate", {'c', "convergence_rate"});
     args::Flag enable_cr_monitoring(parser, "enable_cr_monitoring", "Enable convergence rate monitoring", {"enable-cr-monitoring"});
     args::Flag force_overwrite_output_path(parser, "force", "Forces to overwrite output folder", {'f', "force"});
+    args::Flag empty_gpu_memory(parser, "empty_gpu_cache", "Forces to reset GPU Cache. Should be lighter on VRAM", {"empty-gpu-cache"});
     args::ValueFlag<std::string> data_path(parser, "data_path", "Path to the training data", {'d', "data-path"});
     args::ValueFlag<std::string> output_path(parser, "output_path", "Path to the training output", {'o', "output-path"});
     args::ValueFlag<uint32_t> iterations(parser, "iterations", "Number of iterations to train the model", {'i', "iter"});
@@ -108,6 +109,7 @@ int parse_cmd_line_args(const std::vector<std::string>& args,
         }
         modelParams.output_path = outputDir;
     }
+
     if (iterations) {
         optimParams.iterations = args::get(iterations);
     }
@@ -115,6 +117,8 @@ int parse_cmd_line_args(const std::vector<std::string>& args,
     if (optimParams.early_stopping && convergence_rate) {
         optimParams.convergence_threshold = args::get(convergence_rate);
     }
+
+    optimParams.empty_gpu_cache = args::get(empty_gpu_memory);
     return 0;
 }
 
@@ -128,8 +132,7 @@ int main(int argc, char* argv[]) {
     // TODO: read parameters from JSON file or command line
     auto modelParams = ModelParameters();
     auto optimParams = OptimizationParameters();
-    auto pipelineParams = PipelineParameters();
-    if (parse_cmd_line_args(args, modelParams, optimParams, pipelineParams) < 0) {
+    if (parse_cmd_line_args(args, modelParams, optimParams) < 0) {
         return -1;
     };
     Write_model_parameters_to_file(modelParams);
@@ -164,13 +167,13 @@ int main(int argc, char* argv[]) {
         }
         const int camera_index = indices.back();
         auto& cam = scene.Get_training_camera(camera_index);
-        auto gt_image = cam.Get_original_image();
+        auto gt_image = cam.Get_original_image().to(torch::kCUDA, true);
         indices.pop_back(); // remove last element to iterate over all cameras randomly
         if (iter % 1000 == 0) {
             gaussians.One_up_sh_degree();
         }
         // Render
-        auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, pipelineParams, background);
+        auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, background);
 
         // Loss Computations
         auto l1l = gaussian_splatting::l1_loss(image, gt_image);
@@ -255,6 +258,10 @@ int main(int argc, char* argv[]) {
                 gaussians._optimizer->zero_grad(true);
                 // @TODO: Not sure about type
                 gaussians.Update_learning_rate(iter);
+            }
+
+            if (optimParams.empty_gpu_cache && iter % 100) {
+                c10::cuda::CUDACachingAllocator::emptyCache();
             }
         }
     }
