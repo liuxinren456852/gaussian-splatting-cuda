@@ -398,10 +398,14 @@ void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
     auto new_exp_avg_sq = torch::tensor({});
     const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
 
+    torch::Tensor new_tensor;
     if (param_type == gs::optim::ParamType::Features_rest || param_type == gs::optim::ParamType::Features_dc) {
         std::vector<long> old_shape = {static_cast<int>(old_tensor.size(0)),
                                        static_cast<int>(old_tensor.size(1)),
                                        static_cast<int>(old_tensor.size(2))};
+        std::vector<long> extension_shape = {static_cast<int>(extension_tensor.size(0)),
+                                             static_cast<int>(extension_tensor.size(1)),
+                                             static_cast<int>(extension_tensor.size(2))};
         std::vector<long> new_shape = old_shape;
         new_shape[0] += extension_tensor.size(0);
 
@@ -409,9 +413,17 @@ void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
         new_exp_avg_sq = torch::zeros({new_shape[0], new_shape[1], new_shape[2]}, options);
         copy3DAsync(adamParamStates->exp_avg().data_ptr<float>(), old_shape, new_exp_avg.data_ptr<float>(), new_shape, _stream1);
         copy3DAsync(adamParamStates->exp_avg_sq().data_ptr<float>(), old_shape, new_exp_avg_sq.data_ptr<float>(), new_shape, _stream1);
+
+        new_tensor = torch::zeros({new_shape[0], new_shape[1], new_shape[2]}, options);
+        copy3DAsync(old_tensor.data_ptr<float>(), old_shape, new_tensor.data_ptr<float>(), new_shape, _stream1);
+        auto shifted_ptr = new_tensor.data_ptr<float>() + old_shape[0] * old_shape[1] * old_shape[2];
+        copy3DAsync(extension_tensor.data_ptr<float>(), extension_shape, shifted_ptr, extension_shape, _stream1);
+
+        new_tensor = torch::cat({old_tensor, extension_tensor}, 0);
     } else {
         std::vector<long> old_shape = {static_cast<int>(old_tensor.size(0)), static_cast<int>(old_tensor.size(1))};
         std::vector<long> new_shape = old_shape;
+        std::vector<long> extension_shape = {static_cast<int>(extension_tensor.size(0)), static_cast<int>(extension_tensor.size(1))};
         new_shape[0] += extension_tensor.size(0);
 
         new_exp_avg = torch::zeros({new_shape[0], new_shape[1]}, options);
@@ -422,6 +434,11 @@ void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
 
         new_exp_avg = torch::cat({adamParamStates->exp_avg(), torch::zeros_like(extension_tensor)}, 0);
         new_exp_avg_sq = torch::cat({adamParamStates->exp_avg_sq(), torch::zeros_like(extension_tensor)}, 0);
+
+        new_tensor = torch::zeros({new_shape[0], new_shape[1]}, options);
+        copy2DAsync(old_tensor.data_ptr<float>(), old_shape, new_tensor.data_ptr<float>(), _stream1);
+        auto shifted_ptr = new_tensor.data_ptr<float>() + old_shape[0] * old_shape[1];
+        copy2DAsync(extension_tensor.data_ptr<float>(), extension_shape, shifted_ptr, _stream1);
     }
 
     cudaStreamSynchronize(_stream1);
@@ -429,7 +446,7 @@ void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
     adamParamStates->exp_avg(new_exp_avg);
     adamParamStates->exp_avg_sq(new_exp_avg_sq);
 
-    optimizer->param_groups()[param_position].params()[0] = torch::cat({old_tensor, extension_tensor}, 0).set_requires_grad(true);
+    optimizer->param_groups()[param_position].params()[0] = new_tensor.set_requires_grad(true);
     old_tensor = optimizer->param_groups()[param_position].params()[0];
 
     optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
