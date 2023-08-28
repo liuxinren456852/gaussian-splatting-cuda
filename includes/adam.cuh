@@ -4,59 +4,86 @@
 #include <cuda_runtime.h>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-namespace optim {
-    class AdamParameterBase {
-    public:
-        virtual ~AdamParameterBase() = default;
-        virtual void Sync() = 0;
-        virtual void Step() = 0;
-    };
-    enum class ParamType {
-        Pos,
-        Scaling,
-        Rotation,
-        Opacity,
-        Features_dc,
-        Features_rest,
-    };
-    template <typename T>
-    class AdamParameter final : public AdamParameterBase {
-    public:
-        AdamParameter(ParamType param_type,
-                      std::vector<int> shape,
-                      float learning_rate,
-                      float beta1,
-                      float beta2,
-                      float epsilon);
-        ~AdamParameter() override;
-        void Sync() override;
-        void Step() override;
+namespace gs {
+    namespace optim {
+        enum class ParamType {
+            Pos,
+            Scaling,
+            Rotation,
+            Opacity,
+            Features_dc,
+            Features_rest,
+        };
 
-    protected:
-        T* _d_params{};
-        T* _d_params_grad{};
-        T* _d_avg{};
-        T* _d_avg_sq{};
+        class AdamParameterBase {
+        public:
+            virtual ~AdamParameterBase() = default;
+            virtual void Sync() = 0;
+            virtual void Step() = 0;
+            virtual ParamType GetType() = 0;
+            virtual void UpdateLearningRate(float lr) = 0;
+        };
 
-        ParamType _param_type;
-        std::vector<int> _shape;
-        float _lr;
-        float _beta1;
-        float _beta2;
-        float _epsilon;
-        std::string _param_name;
-        cudaStream_t _stream{};
-    };
+        template <typename T>
+        class AdamParameter final : public AdamParameterBase {
+        public:
+            AdamParameter(ParamType param_type,
+                          std::vector<int> shape,
+                          float learning_rate,
+                          float beta1 = 0.9f,
+                          float beta2 = 0.999f,
+                          float epsilon = 1e-15);
+            ~AdamParameter() override;
+            void Sync() override;
+            void Step() override;
+            inline ParamType GetType() override { return _param_type; }
+            inline void UpdateLearningRate(float lr) override { _lr = lr; }
+            T* Get_Exp_Avg() { return _d_avg; }
+            T* Get_Exp_Avg_Sq() { return _d_avg_sq; }
+            void Set_Exp_Avg(T* d_avg, std::vector<int> size);
+            void Set_Exp_Avg_Sq(T* d_avg_sq, std::vector<int> size);
 
-    class Adam {
-    public:
-        void Sync();
-        void Step();
-        void AddParameter(std::shared_ptr<AdamParameterBase>& param);
+        private:
+            T* _d_params{};
+            T* _d_params_grad{};
+            T* _d_avg{};
+            T* _d_avg_sq{};
 
-    private:
-        std::vector<std::shared_ptr<AdamParameterBase>> _params;
-    };
-} // namespace optim
+            ParamType _param_type;
+            std::vector<int> _shape;
+            float _lr;
+            float _beta1;
+            float _beta2;
+            float _epsilon;
+            std::string _param_name;
+            cudaStream_t _stream{};
+        };
+
+        class Adam {
+        public:
+            void Sync();
+            void Step();
+            void AddParameter(std::shared_ptr<AdamParameterBase> param);
+            inline std::shared_ptr<AdamParameterBase> GetParameters(ParamType paramType) { return _params[paramType]; };
+
+        private:
+            std::unordered_map<ParamType, std::shared_ptr<AdamParameterBase>> _params;
+        };
+
+        // preinstantiate templates -> faster compile time
+        template class AdamParameter<float>;
+        template class AdamParameter<float3>;
+        template class AdamParameter<float4>;
+
+        // define types for convenience
+        using OpacityParamType = AdamParameter<float>;
+        using ScalingParamType = AdamParameter<float3>;
+        using RotationParamType = AdamParameter<float4>;
+        using PosParamType = AdamParameter<float3>;
+        using FeaturesDcParamType = AdamParameter<float3>;
+        using FeaturesRestParamType = AdamParameter<float3>;
+    } // namespace optim
+} // namespace gs

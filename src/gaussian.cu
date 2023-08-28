@@ -3,7 +3,9 @@
 #include "read_utils.cuh"
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <cuda_runtime.h>
 #include <exception>
+#include <memory>
 #include <thread>
 
 GaussianModel::GaussianModel(int sh_degree) : _max_sh_degree(sh_degree) {
@@ -121,6 +123,33 @@ void GaussianModel::Training_setup(const OptimizationParameters& params) {
     static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[5].options()).eps(1e-15);
 
     _optimizer = std::make_unique<torch::optim::Adam>(optimizer_params_groups, torch::optim::AdamOptions(0.f).eps(1e-15));
+
+    const std::vector<int> xyz_shape = {static_cast<int>(_xyz.size(0)), static_cast<int>(_xyz.size(1))};
+    const std::vector<int> features_dc_shape = {static_cast<int>(_features_dc.size(0)), static_cast<int>(_features_dc.size(1)), static_cast<int>(_features_dc.size(2))};
+    const std::vector<int> features_rest_shape = {static_cast<int>(_features_rest.size(0)), static_cast<int>(_features_rest.size(1)), static_cast<int>(_features_rest.size(2))};
+    const std::vector<int> scaling_shape = {static_cast<int>(_scaling.size(0)), static_cast<int>(_scaling.size(1))};
+    const std::vector<int> rotation_shape = {static_cast<int>(_rotation.size(0)), static_cast<int>(_rotation.size(1))};
+    const std::vector<int> opacity_shape = {static_cast<int>(_opacity.size(0)), static_cast<int>(_opacity.size(1))};
+
+    _new_optimizer = std::make_unique<gs::optim::Adam>();
+    _new_optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter<float3>>(gs::optim::ParamType::Pos,
+                                                                                    xyz_shape,
+                                                                                    params.position_lr_init * this->_spatial_lr_scale));
+    _new_optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter<float>>(gs::optim::ParamType::Features_dc,
+                                                                                   features_dc_shape,
+                                                                                   params.feature_lr));
+    _new_optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter<float>>(gs::optim::ParamType::Features_rest,
+                                                                                   features_rest_shape,
+                                                                                   params.feature_lr / 20.f));
+    _new_optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter<float>>(gs::optim::ParamType::Scaling,
+                                                                                   scaling_shape,
+                                                                                   params.scaling_lr * this->_spatial_lr_scale));
+    _new_optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter<float4>>(gs::optim::ParamType::Rotation,
+                                                                                    rotation_shape,
+                                                                                    params.rotation_lr));
+    _new_optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter<float>>(gs::optim::ParamType::Opacity,
+                                                                                   opacity_shape,
+                                                                                   params.opacity_lr));
 }
 
 void GaussianModel::Update_learning_rate(float iteration) {
@@ -128,6 +157,8 @@ void GaussianModel::Update_learning_rate(float iteration) {
     // xyz is added first, since _optimizer->param_groups() return a vector, we assume that xyz stays first
     auto lr = _xyz_scheduler_args(iteration);
     static_cast<torch::optim::AdamOptions&>(_optimizer->param_groups()[0].options()).set_lr(lr);
+
+    _new_optimizer->GetParameters(gs::optim::ParamType::Pos)->UpdateLearningRate(lr);
 }
 
 void GaussianModel::Reset_opacity() {

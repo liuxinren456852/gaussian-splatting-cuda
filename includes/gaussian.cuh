@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "adam.cuh"
 #include "general_utils.cuh"
 #include "parameters.cuh"
 #include "point_cloud.cuh"
@@ -49,6 +50,7 @@ public:
 public:
     // should not be public or it should maybe be pulled out here. Not sure yet
     // This is all public mostly for debugging purposes
+    std::unique_ptr<gs::optim::Adam> _new_optimizer;
     std::unique_ptr<torch::optim::Adam> _optimizer;
     torch::Tensor _max_radii2D;
 
