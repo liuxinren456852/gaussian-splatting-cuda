@@ -2,49 +2,61 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace optim {
-    class Adam {
+    class AdamParameterBase {
     public:
-        Adam(float learning_rate, float beta1, float beta2, float epsilon);
-        ~Adam();
-        void InitializePos(std::vector<int> shape, float learning_rate);
-        void InitializeScaling(std::vector<int> shape, float learning_rate);
-        void InitializeRotation(std::vector<int> shape, float learning_rate);
-        void InitializeOpacity(std::vector<int> shape, float learning_rate);
-        void InitializeFeaturesDC(std::vector<int> shape, float learning_rate);
-        void InitializeFeaturesRest(std::vector<int> shape, float learning_rate);
+        virtual ~AdamParameterBase() = default;
+        virtual void Sync() = 0;
+        virtual void Step() = 0;
+    };
+    enum class ParamType {
+        Pos,
+        Scaling,
+        Rotation,
+        Opacity,
+        Features_dc,
+        Features_rest,
+    };
+    template <typename T>
+    class AdamParameter final : public AdamParameterBase {
+    public:
+        AdamParameter(ParamType param_type,
+                      std::vector<int> shape,
+                      float learning_rate,
+                      float beta1,
+                      float beta2,
+                      float epsilon);
+        ~AdamParameter() override;
+        void Sync() override;
+        void Step() override;
 
-        void sync();
-        void step();
+    protected:
+        T* _d_params{};
+        T* _d_params_grad{};
+        T* _d_avg{};
+        T* _d_avg_sq{};
 
-    private:
-        float* _d_ma_pos;
-        float* _d_ma_scaling;
-        float* _d_ma_rotation;
-        float* _d_ma_opacity;
-        float* _d_ma_features_dc;
-        float* _d_ma_features_rest;
-
-    private:
-        float _pos_lr;
-        float _scaling_lr;
-        float _rotation_lr;
-        float _opacity_lr;
-        float _features_dc_lr;
-        float _features_rest_lr;
+        ParamType _param_type;
+        std::vector<int> _shape;
+        float _lr;
         float _beta1;
         float _beta2;
         float _epsilon;
-        float _beta1_t;
-        float _beta2_t;
+        std::string _param_name;
+        cudaStream_t _stream{};
+    };
 
-        cudaStream_t _stream_pos;
-        cudaStream_t _stream_scaling;
-        cudaStream_t _stream_rotation;
-        cudaStream_t _stream_opacity;
-        cudaStream_t _stream_features_dc;
-        cudaStream_t _stream_features_rest;
+    class Adam {
+    public:
+        void Sync();
+        void Step();
+        void AddParameter(std::shared_ptr<AdamParameterBase>& param);
+
+    private:
+        std::vector<std::shared_ptr<AdamParameterBase>> _params;
     };
 } // namespace optim

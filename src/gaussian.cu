@@ -406,7 +406,7 @@ __global__ void concat_elements_kernel_features_rest(
     const size_t N,
     const size_t orig_N,
     const size_t F1,
-    const size_t F3) {
+    const size_t F2) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N) {
         return;
@@ -417,9 +417,7 @@ __global__ void concat_elements_kernel_features_rest(
     const int64_t dest_idx = orig_N + idx;
 
     for (int j = 0; j < F1; j++) {
-        for (int k = 0; k < F3; k++) {
-            new_features_rest[dest_idx * F1 * F3 + j * F3 + k] = features_rest[index * F1 * F3 + j * F3 + k];
-        }
+        new_features_rest[dest_idx * F1 + j] = features_rest[index * F1 + j];
     }
 }
 
@@ -591,16 +589,16 @@ void GaussianModel::select_elements_and_cat(
             extension_size,
             xyz_size[0]);
         copy3DAsync(features_rest, features_rest_size, new_features_rest.data_ptr<float>(), {original_size + extension_size, features_rest_size[1], features_rest_size[2]}, _stream3);
-        //        const auto* features_rest_ptr = reinterpret_cast<const float3*>(features_rest);
-        //        auto* new_features_rest_ptr = reinterpret_cast<float3*>(new_features_rest.data_ptr<float>());
-        //        concat_elements_kernel_features_rest<<<blocks, threads, 0, _stream3>>>(
-        //            features_rest_ptr,
-        //            indices,
-        //            new_features_rest_ptr,
-        //            extension_size,
-        //            xyz_size[0],features_rest_size[1], features_rest_size[2]);
-        //        CHECK_LAST_CUDA_ERROR();
-        //
+        const auto* features_rest_ptr = reinterpret_cast<const float3*>(features_rest);
+        auto* new_features_rest_ptr = reinterpret_cast<float3*>(new_features_rest.data_ptr<float>());
+        concat_elements_kernel_features_rest<<<blocks, threads, 0, _stream3>>>(
+            features_rest_ptr,
+            indices,
+            new_features_rest_ptr,
+            extension_size,
+            features_rest_size[0], features_rest_size[1], features_rest_size[2]);
+        CHECK_LAST_CUDA_ERROR();
+
         copy2DAsync(rotation, rotation_size, new_rotation.data_ptr<float>(), _stream6);
         auto* rotation_ptr = reinterpret_cast<const float4*>(rotation);
         auto* new_rotation_ptr = reinterpret_cast<float4*>(new_rotation.data_ptr<float>());
