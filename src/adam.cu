@@ -1,5 +1,6 @@
 // Copyright (c) 2023 Janusch Patas.
 #include "adam.cuh"
+#include "debug_utils.cuh"
 #include <stdexcept>
 #include <utility>
 
@@ -77,24 +78,27 @@ namespace gs {
             cudaStreamCreate(&_stream);
             size_t numel = 1;
             // We assume the last dim is the dim of the parameter like float, float2, float3, ...
-            for (int i = 0; i < _shape.size() - 1; ++i) {
+            int total = std::max(1, static_cast<int>(_shape.size()) - 1);
+            for (int i = 0; i < total; ++i) {
                 numel *= _shape[i];
             }
 
-            cudaMallocAsync(&_d_params, sizeof(T) * numel, _stream);
-            cudaMemsetAsync(_d_params, 0, sizeof(T) * numel, _stream);
-            cudaMallocAsync(&_d_params_grad, sizeof(T) * numel, _stream);
-            cudaMemsetAsync(_d_params_grad, 0, sizeof(T) * numel, _stream);
-            cudaMallocAsync(&_d_avg, sizeof(T) * numel, _stream);
-            cudaMemsetAsync(_d_avg, 0, sizeof(T) * _shape[0], _stream);
+            CHECK_CUDA_ERROR(cudaMallocAsync(&_d_params, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMemsetAsync(_d_params, 0, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMallocAsync(&_d_params_grad, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMemsetAsync(_d_params_grad, 0, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMallocAsync(&_d_avg, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMemsetAsync(_d_avg, 0, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMallocAsync(&_d_avg_sq, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMemsetAsync(_d_avg_sq, 0, sizeof(T) * numel, _stream));
         }
 
         template <typename T>
         AdamParameter<T>::~AdamParameter() {
-            cudaStreamDestroy(_stream);
-            cudaFree(_d_params);
-            cudaFree(_d_params_grad);
-            cudaFree(_d_avg);
+            CHECK_CUDA_ERROR(cudaStreamDestroy(_stream));
+            CHECK_CUDA_ERROR(cudaFree(_d_params));
+            CHECK_CUDA_ERROR(cudaFree(_d_params_grad));
+            CHECK_CUDA_ERROR(cudaFree(_d_avg));
         }
 
         template <typename T>
@@ -103,7 +107,7 @@ namespace gs {
             static const int blocks_per_grid = (_shape[0] + threads_per_block - 1) / threads_per_block;
             switch (_param_type) {
             case ParamType::Pos:
-            case ParamType::Scaling:
+            case ParamType::Scaling: {
                 AdamUpdatePos_Scaling_Kernel<<<blocks_per_grid, threads_per_block, 0, _stream>>>(
                     reinterpret_cast<float3*>(_d_params),
                     reinterpret_cast<float3*>(_d_params_grad),
@@ -114,8 +118,9 @@ namespace gs {
                     _beta1,
                     _beta2,
                     _epsilon);
-                break;
-            case ParamType::Rotation:
+                CHECK_LAST_CUDA_ERROR();
+            } break;
+            case ParamType::Rotation: {
                 AdamUpdateRotationKernel<<<blocks_per_grid, threads_per_block, 0, _stream>>>(
                     reinterpret_cast<float4*>(_d_params),
                     reinterpret_cast<float4*>(_d_params_grad),
@@ -126,8 +131,10 @@ namespace gs {
                     _beta1,
                     _beta2,
                     _epsilon);
-                break;
-            case ParamType::Opacity:
+
+                CHECK_LAST_CUDA_ERROR();
+            } break;
+            case ParamType::Opacity: {
                 AdamUpdateOpactiyKernel<<<blocks_per_grid, threads_per_block, 0, _stream>>>(
                     reinterpret_cast<float*>(_d_params),
                     reinterpret_cast<float*>(_d_params_grad),
@@ -138,9 +145,11 @@ namespace gs {
                     _beta1,
                     _beta2,
                     _epsilon);
-                break;
+                CHECK_LAST_CUDA_ERROR();
+            } break;
             case ParamType::Features_dc:
-            case ParamType::Features_rest:
+            case ParamType::Features_rest: {
+
                 AdamUpdateFeatureKernel<<<blocks_per_grid, threads_per_block, 0, _stream>>>(
                     reinterpret_cast<float3*>(_d_params),
                     reinterpret_cast<float3*>(_d_params_grad),
@@ -152,7 +161,8 @@ namespace gs {
                     _beta1,
                     _beta2,
                     _epsilon);
-                break;
+                CHECK_LAST_CUDA_ERROR();
+            } break;
             default:
                 throw std::runtime_error("Unknown parameter type");
             }
@@ -160,7 +170,7 @@ namespace gs {
 
         template <typename T>
         void AdamParameter<T>::Sync() {
-            cudaStreamSynchronize(_stream);
+            CHECK_CUDA_ERROR(cudaStreamSynchronize(_stream));
         }
 
         void Adam::Step() {
@@ -171,9 +181,26 @@ namespace gs {
 
         template <typename T>
         void AdamParameter<T>::Set_Exp_Avg_Sq(T* d_avg_sq, std::vector<int> size) {
+            int numel = 1;
+            int total = std::max(1, static_cast<int>(size.size() - 1));
+            for (int i = 0; i < total; ++i) {
+                numel *= size[i];
+            }
+            CHECK_CUDA_ERROR(cudaFree(_d_avg_sq));
+            CHECK_CUDA_ERROR(cudaMallocAsync(&_d_avg_sq, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMemcpyAsync(_d_avg_sq, d_avg_sq, sizeof(T) * numel, cudaMemcpyDeviceToDevice, _stream));
         }
         template <typename T>
         void AdamParameter<T>::Set_Exp_Avg(T* d_avg, std::vector<int> size) {
+            // for now super inefficient
+            int numel = 1;
+            int total = std::max(1, static_cast<int>(size.size() - 1));
+            for (int i = 0; i < total; ++i) {
+                numel *= size[i];
+            }
+            CHECK_CUDA_ERROR(cudaFree(_d_avg));
+            CHECK_CUDA_ERROR(cudaMallocAsync(&_d_avg, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMemcpyAsync(_d_avg, d_avg, sizeof(T) * numel, cudaMemcpyDeviceToDevice, _stream));
         }
 
         void Adam::Sync() {

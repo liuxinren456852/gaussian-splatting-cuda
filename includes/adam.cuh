@@ -62,12 +62,25 @@ namespace gs {
             cudaStream_t _stream{};
         };
 
+        // define types for convenience
+        using opacity_param_t = float;
+        using scaling_param_t = float3;
+        using rotation_param_t = float4;
+        using pos_param_t = float3;
+        using feature_dc_param_t = float3;
+        using feature_rest_param_t = float3;
+
         class Adam {
         public:
             void Sync();
             void Step();
             void AddParameter(std::shared_ptr<AdamParameterBase> param);
             inline std::shared_ptr<AdamParameterBase> GetParameters(ParamType paramType) { return _params[paramType]; };
+
+            template <typename T>
+            inline std::shared_ptr<AdamParameter<T>> GetAdamParameter(ParamType param_type) {
+                return std::dynamic_pointer_cast<AdamParameter<T>>(_params[param_type]);
+            }
 
         private:
             std::unordered_map<ParamType, std::shared_ptr<AdamParameterBase>> _params;
@@ -78,12 +91,5 @@ namespace gs {
         template class AdamParameter<float3>;
         template class AdamParameter<float4>;
 
-        // define types for convenience
-        using OpacityParamType = AdamParameter<float>;
-        using ScalingParamType = AdamParameter<float3>;
-        using RotationParamType = AdamParameter<float4>;
-        using PosParamType = AdamParameter<float3>;
-        using FeaturesDcParamType = AdamParameter<float3>;
-        using FeaturesRestParamType = AdamParameter<float3>;
     } // namespace optim
 } // namespace gs
