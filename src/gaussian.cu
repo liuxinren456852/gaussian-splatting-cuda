@@ -188,6 +188,57 @@ void GaussianModel::Reset_opacity() {
     opacity_params->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::opacity_param_t*>(updateTensor.data_ptr<float>()), {static_cast<int>(new_opacity.size(0))});
 }
 
+void copy3DAsync(const float* src,
+                 const std::vector<long>& src_size,
+                 float* dst,
+                 const std::vector<long>& dst_size,
+                 cudaStream_t stream) {
+    cudaMemcpy3DParms copyParams = {0};
+    copyParams.kind = cudaMemcpyDeviceToDevice;
+
+    copyParams.srcPtr = make_cudaPitchedPtr(
+        (void*)src,
+        (size_t)src_size[2] * sizeof(float),
+        (size_t)src_size[2],
+        (size_t)src_size[1]);
+
+    copyParams.dstPtr = make_cudaPitchedPtr(
+        (void*)dst,
+        (size_t)dst_size[2] * sizeof(float),
+        (size_t)dst_size[2],
+        (size_t)dst_size[1]);
+
+    copyParams.extent = make_cudaExtent(
+        (size_t)src_size[2] * sizeof(float),
+        (size_t)src_size[1],
+        (size_t)src_size[0]);
+    CHECK_CUDA_ERROR(cudaMemcpy3DAsync(&copyParams, stream));
+}
+
+void copy2DAsync(const float* src, const std::vector<long>& src_size, float* dst, cudaStream_t stream) {
+    //    float *new_dst;
+    //    cudaMalloc(&new_dst, dst.size(0) * dst.size(1) * sizeof(float));
+    if (src_size.size() != 2) {
+        return;
+    }
+    size_t width_in_bytes = src_size[1] * sizeof(float);
+    size_t height_in_elements = src_size[0];
+    size_t src_pitch = src_size[1] * sizeof(float); // provide stride
+    size_t dst_pitch = src_size[1] * sizeof(float); // make stride
+
+    cudaMemcpy2DAsync(
+        dst,                      // Destination pointer
+        dst_pitch,                // Destination pitch
+        src,                      // Source pointer
+        src_pitch,                // Source pitch
+        width_in_bytes,           // Width of the 2D region in bytes
+        height_in_elements,       // Height of the 2D region in elements
+        cudaMemcpyDeviceToDevice, // Specifies the kind of copy (Device to Device)
+        stream                    // Stream to perform the copy
+    );
+    CHECK_LAST_CUDA_ERROR();
+}
+
 void prune_optimizer(torch::optim::Adam* optimizer,
                      const torch::Tensor& mask,
                      torch::Tensor& old_tensor,
@@ -340,10 +391,43 @@ void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
         *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
     optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
 
-    const auto exp_avg = torch::cat({adamParamStates->exp_avg(), torch::zeros_like(extension_tensor)}, 0);
-    adamParamStates->exp_avg(exp_avg);
-    const auto exp_avg_sq = torch::cat({adamParamStates->exp_avg_sq(), torch::zeros_like(extension_tensor)}, 0);
-    adamParamStates->exp_avg_sq(exp_avg_sq);
+    cudaStream_t _stream1;
+    cudaStreamCreate(&_stream1);
+
+    auto new_exp_avg = torch::tensor({});
+    auto new_exp_avg_sq = torch::tensor({});
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+
+    if (param_type == gs::optim::ParamType::Features_rest || param_type == gs::optim::ParamType::Features_dc) {
+        std::vector<long> old_shape = {static_cast<int>(old_tensor.size(0)),
+                                       static_cast<int>(old_tensor.size(1)),
+                                       static_cast<int>(old_tensor.size(2))};
+        std::vector<long> new_shape = old_shape;
+        new_shape[0] += extension_tensor.size(0);
+
+        new_exp_avg = torch::zeros({new_shape[0], new_shape[1], new_shape[2]}, options);
+        new_exp_avg_sq = torch::zeros({new_shape[0], new_shape[1], new_shape[2]}, options);
+        copy3DAsync(adamParamStates->exp_avg().data_ptr<float>(), old_shape, new_exp_avg.data_ptr<float>(), new_shape, _stream1);
+        copy3DAsync(adamParamStates->exp_avg_sq().data_ptr<float>(), old_shape, new_exp_avg_sq.data_ptr<float>(), new_shape, _stream1);
+    } else {
+        std::vector<long> old_shape = {static_cast<int>(old_tensor.size(0)), static_cast<int>(old_tensor.size(1))};
+        std::vector<long> new_shape = old_shape;
+        new_shape[0] += extension_tensor.size(0);
+
+        new_exp_avg = torch::zeros({new_shape[0], new_shape[1]}, options);
+        new_exp_avg_sq = torch::zeros({new_shape[0], new_shape[1]}, options);
+
+        copy2DAsync(adamParamStates->exp_avg().data_ptr<float>(), old_shape, new_exp_avg.data_ptr<float>(), _stream1);
+        copy2DAsync(adamParamStates->exp_avg_sq().data_ptr<float>(), old_shape, new_exp_avg_sq.data_ptr<float>(), _stream1);
+
+        new_exp_avg = torch::cat({adamParamStates->exp_avg(), torch::zeros_like(extension_tensor)}, 0);
+        new_exp_avg_sq = torch::cat({adamParamStates->exp_avg_sq(), torch::zeros_like(extension_tensor)}, 0);
+    }
+
+    cudaStreamSynchronize(_stream1);
+    cudaStreamDestroy(_stream1);
+    adamParamStates->exp_avg(new_exp_avg);
+    adamParamStates->exp_avg_sq(new_exp_avg_sq);
 
     optimizer->param_groups()[param_position].params()[0] = torch::cat({old_tensor, extension_tensor}, 0).set_requires_grad(true);
     old_tensor = optimizer->param_groups()[param_position].params()[0];
@@ -359,33 +443,33 @@ void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
     switch (param_type) {
     case gs::optim::ParamType::Pos: {
         auto param = new_optimizer->GetAdamParameter<gs::optim::pos_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::pos_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::pos_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg(reinterpret_cast<gs::optim::pos_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::pos_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
     } break;
     case gs::optim::ParamType::Features_dc: {
         auto param = new_optimizer->GetAdamParameter<gs::optim::feature_dc_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_dc_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_dc_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_dc_param_t*>(new_exp_avg.data_ptr<float>()), shape);
+        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_dc_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
     } break;
     case gs::optim::ParamType::Features_rest: {
         auto param = new_optimizer->GetAdamParameter<gs::optim::feature_rest_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_rest_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_rest_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_rest_param_t*>(new_exp_avg.data_ptr<float>()), shape);
+        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_rest_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
     } break;
     case gs::optim::ParamType::Scaling: {
         auto param = new_optimizer->GetAdamParameter<gs::optim::scaling_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::scaling_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::scaling_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg(reinterpret_cast<gs::optim::scaling_param_t*>(new_exp_avg.data_ptr<float>()), shape);
+        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::scaling_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
     } break;
     case gs::optim::ParamType::Rotation: {
         auto param = new_optimizer->GetAdamParameter<gs::optim::rotation_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::rotation_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::rotation_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg(reinterpret_cast<gs::optim::rotation_param_t*>(new_exp_avg.data_ptr<float>()), shape);
+        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::rotation_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
     } break;
     case gs::optim::ParamType::Opacity: {
         auto param = new_optimizer->GetAdamParameter<gs::optim::opacity_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::opacity_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::opacity_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg(reinterpret_cast<gs::optim::opacity_param_t*>(new_exp_avg.data_ptr<float>()), shape);
+        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::opacity_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
     } break;
     default:
         throw std::runtime_error("Not implemented cast in tensors_to_optimizer_new");
@@ -578,57 +662,6 @@ __global__ void concat_elements_kernel_features_rest(
     for (int j = 0; j < F1; j++) {
         new_features_rest[dest_idx * F1 + j] = features_rest[index * F1 + j];
     }
-}
-
-void copy3DAsync(const float* src,
-                 const std::vector<long>& src_size,
-                 float* dst,
-                 const std::vector<long>& dst_size,
-                 cudaStream_t stream) {
-    cudaMemcpy3DParms copyParams = {0};
-    copyParams.kind = cudaMemcpyDeviceToDevice;
-
-    copyParams.srcPtr = make_cudaPitchedPtr(
-        (void*)src,
-        (size_t)src_size[2] * sizeof(float),
-        (size_t)src_size[2],
-        (size_t)src_size[1]);
-
-    copyParams.dstPtr = make_cudaPitchedPtr(
-        (void*)dst,
-        (size_t)dst_size[2] * sizeof(float),
-        (size_t)dst_size[2],
-        (size_t)dst_size[1]);
-
-    copyParams.extent = make_cudaExtent(
-        (size_t)src_size[2] * sizeof(float),
-        (size_t)src_size[1],
-        (size_t)src_size[0]);
-    CHECK_CUDA_ERROR(cudaMemcpy3DAsync(&copyParams, stream));
-}
-
-void copy2DAsync(const float* src, const std::vector<long>& src_size, float* dst, cudaStream_t stream) {
-    //    float *new_dst;
-    //    cudaMalloc(&new_dst, dst.size(0) * dst.size(1) * sizeof(float));
-    if (src_size.size() != 2) {
-        return;
-    }
-    size_t width_in_bytes = src_size[1] * sizeof(float);
-    size_t height_in_elements = src_size[0];
-    size_t src_pitch = src_size[1] * sizeof(float); // provide stride
-    size_t dst_pitch = src_size[1] * sizeof(float); // make stride
-
-    cudaMemcpy2DAsync(
-        dst,                      // Destination pointer
-        dst_pitch,                // Destination pitch
-        src,                      // Source pointer
-        src_pitch,                // Source pitch
-        width_in_bytes,           // Width of the 2D region in bytes
-        height_in_elements,       // Height of the 2D region in elements
-        cudaMemcpyDeviceToDevice, // Specifies the kind of copy (Device to Device)
-        stream                    // Stream to perform the copy
-    );
-    CHECK_LAST_CUDA_ERROR();
 }
 
 void copy1DAsync(const torch::Tensor& src, torch::Tensor& dst, cudaStream_t stream) {
@@ -827,7 +860,7 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
                             indices.data_ptr<int64_t>(),
                             _xyz.size(0),
                             extension_count);
-    stream1.synchronize();
+    //    stream1.synchronize();
 }
 
 void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float extent, float max_screen_size) {
