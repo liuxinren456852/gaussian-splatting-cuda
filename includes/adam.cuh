@@ -45,6 +45,7 @@ namespace gs {
             T* Get_Exp_Avg_Sq() { return _d_avg_sq; }
             void Set_Exp_Avg(T* d_avg, std::vector<int> size);
             void Set_Exp_Avg_Sq(T* d_avg_sq, std::vector<int> size);
+            void Update_Parameter_Pointer(T* d_param) { _d_params = d_param; };
 
         private:
             T* _d_params{};

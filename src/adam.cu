@@ -83,8 +83,10 @@ namespace gs {
                 numel *= _shape[i];
             }
 
-            CHECK_CUDA_ERROR(cudaMallocAsync(&_d_params, sizeof(T) * numel, _stream));
-            CHECK_CUDA_ERROR(cudaMemsetAsync(_d_params, 0, sizeof(T) * numel, _stream));
+            // no memory allocatioon for _d_param. It just a pointer to the gausian paramter
+            // At this point I believe it should be part of adam optimizer. Not sure yet
+            //          CHECK_CUDA_ERROR(cudaMallocAsync(&_d_params, sizeof(T) * numel, _stream));
+            //          CHECK_CUDA_ERROR(cudaMemsetAsync(_d_params, 0, sizeof(T) * numel, _stream));
             CHECK_CUDA_ERROR(cudaMallocAsync(&_d_params_grad, sizeof(T) * numel, _stream));
             CHECK_CUDA_ERROR(cudaMemsetAsync(_d_params_grad, 0, sizeof(T) * numel, _stream));
             CHECK_CUDA_ERROR(cudaMallocAsync(&_d_avg, sizeof(T) * numel, _stream));
@@ -96,7 +98,7 @@ namespace gs {
         template <typename T>
         AdamParameter<T>::~AdamParameter() {
             CHECK_CUDA_ERROR(cudaStreamDestroy(_stream));
-            CHECK_CUDA_ERROR(cudaFree(_d_params));
+            //            CHECK_CUDA_ERROR(cudaFree(_d_params));
             CHECK_CUDA_ERROR(cudaFree(_d_params_grad));
             CHECK_CUDA_ERROR(cudaFree(_d_avg));
         }

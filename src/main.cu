@@ -173,13 +173,26 @@ int main(int argc, char* argv[]) {
             gaussians.One_up_sh_degree();
         }
         // Render
-        auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, background);
+
+        gs::GaussianRasterizer rasterizer;
+        // forward is called inside render
+        auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, background, rasterizer);
 
         // Loss Computations
-        auto l1l = gaussian_splatting::l1_loss(image, gt_image);
-        auto ssim_loss = gaussian_splatting::ssim(image, gt_image, conv_window, window_size, channel);
-        auto loss = (1.f - optimParams.lambda_dssim) * l1l + optimParams.lambda_dssim * (1.f - ssim_loss);
+        auto [L1l, dL_l1_loss] = gaussian_splatting::l1_loss(image, gt_image);
+        auto [ssim_loss, dL_ssim_dimg1] = gaussian_splatting::ssim(image, gt_image, conv_window, window_size, channel);
+        auto loss = (1.f - optimParams.lambda_dssim) * L1l + optimParams.lambda_dssim * (1.f - ssim_loss);
 
+        // Calculate the loss derivative with respect to the rendering output from the forward pass
+        const auto dloss_dssim = -optimParams.lambda_dssim;
+        const auto dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
+        const auto dloss_dimage = dloss_dLl1 * dL_l1_loss + dloss_dssim * dL_ssim_dimg1;
+
+        // backward pass
+        rasterizer.Backward(dloss_dimage);
+        // Work-around for now. This should be done in the backward pass I think.
+        // Other option: Parameters should be completely shifted to the optimizer if there are optimized?
+        gaussians.Update_Parameter_Pointer();
         // Update status line
         if (iter % 100 == 0) {
             auto cur_time = std::chrono::steady_clock::now();
@@ -254,10 +267,8 @@ int main(int argc, char* argv[]) {
 
             //  Optimizer step
             if (iter < optimParams.iterations) {
+                // TODO: Zero_grad? Do we need this?
                 gaussians._new_optimizer->Step();
-                gaussians._optimizer->step();
-                gaussians._optimizer->zero_grad(true);
-                // @TODO: Not sure about type
                 gaussians.Update_learning_rate(iter);
             }
 

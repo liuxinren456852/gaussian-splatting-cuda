@@ -106,24 +106,6 @@ void GaussianModel::Training_setup(const OptimizationParameters& params) {
                                               params.position_lr_delay_mult,
                                               params.position_lr_max_steps);
 
-    std::vector<torch::optim::OptimizerParamGroup> optimizer_params_groups;
-    optimizer_params_groups.reserve(6);
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_xyz}, std::make_unique<torch::optim::AdamOptions>(params.position_lr_init * this->_spatial_lr_scale)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_features_dc}, std::make_unique<torch::optim::AdamOptions>(params.feature_lr)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_features_rest}, std::make_unique<torch::optim::AdamOptions>(params.feature_lr / 20.)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_scaling}, std::make_unique<torch::optim::AdamOptions>(params.scaling_lr * this->_spatial_lr_scale)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_rotation}, std::make_unique<torch::optim::AdamOptions>(params.rotation_lr)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_opacity}, std::make_unique<torch::optim::AdamOptions>(params.opacity_lr)));
-
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[0].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[1].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[2].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[3].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[4].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[5].options()).eps(1e-15);
-
-    _optimizer = std::make_unique<torch::optim::Adam>(optimizer_params_groups, torch::optim::AdamOptions(0.f).eps(1e-15));
-
     const std::vector<int> xyz_shape = {static_cast<int>(_xyz.size(0)), static_cast<int>(_xyz.size(1))};
     const std::vector<int> features_dc_shape = {static_cast<int>(_features_dc.size(0)), static_cast<int>(_features_dc.size(1)), static_cast<int>(_features_dc.size(2))};
     const std::vector<int> features_rest_shape = {static_cast<int>(_features_rest.size(0)), static_cast<int>(_features_rest.size(1)), static_cast<int>(_features_rest.size(2))};
@@ -158,34 +140,33 @@ void GaussianModel::Update_learning_rate(float iteration) {
     // This is hacky because you cant change in libtorch individual parameter learning rate
     // xyz is added first, since _optimizer->param_groups() return a vector, we assume that xyz stays first
     auto lr = _xyz_scheduler_args(iteration);
-    static_cast<torch::optim::AdamOptions&>(_optimizer->param_groups()[0].options()).set_lr(lr);
-
     _new_optimizer->GetParameters(gs::optim::ParamType::Pos)->UpdateLearningRate(lr);
+}
+
+void GaussianModel::Update_Parameter_Pointer() {
+    auto xyz = reinterpret_cast<gs::optim::pos_param_t*>(_xyz.data_ptr<float>());
+    auto features_dc = reinterpret_cast<gs::optim::feature_dc_param_t*>(_features_dc.data_ptr<float>());
+    auto features_rest = reinterpret_cast<gs::optim::feature_rest_param_t*>(_features_rest.data_ptr<float>());
+    auto scaling = reinterpret_cast<gs::optim::scaling_param_t*>(_scaling.data_ptr<float>());
+    auto rotation = reinterpret_cast<gs::optim::rotation_param_t*>(_rotation.data_ptr<float>());
+    auto opacity = reinterpret_cast<gs::optim::opacity_param_t*>(_opacity.data_ptr<float>());
+
+    _new_optimizer->GetAdamParameter<gs::optim::pos_param_t>(gs::optim::ParamType::Pos)->Update_Parameter_Pointer(xyz);
+    _new_optimizer->GetAdamParameter<gs::optim::feature_dc_param_t>(gs::optim::ParamType::Features_dc)->Update_Parameter_Pointer(features_dc);
+    _new_optimizer->GetAdamParameter<gs::optim::feature_rest_param_t>(gs::optim::ParamType::Features_rest)->Update_Parameter_Pointer(features_rest);
+    _new_optimizer->GetAdamParameter<gs::optim::scaling_param_t>(gs::optim::ParamType::Scaling)->Update_Parameter_Pointer(scaling);
+    _new_optimizer->GetAdamParameter<gs::optim::rotation_param_t>(gs::optim::ParamType::Rotation)->Update_Parameter_Pointer(rotation);
+    _new_optimizer->GetAdamParameter<gs::optim::opacity_param_t>(gs::optim::ParamType::Opacity)->Update_Parameter_Pointer(opacity);
 }
 
 void GaussianModel::Reset_opacity() {
     // opacitiy activation
-    auto new_opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f);
-
-    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
-        *_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl())]));
-
-    _optimizer->state().erase(c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl()));
-
-    auto updateTensor = torch::zeros_like(new_opacity);
-
-    adamParamStates->exp_avg(updateTensor);
-    adamParamStates->exp_avg_sq(updateTensor);
-    // replace tensor
-    _optimizer->param_groups()[5].params()[0] = new_opacity.set_requires_grad(true);
-    _opacity = _optimizer->param_groups()[5].params()[0];
-
-    _optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
-
+    _opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f).set_requires_grad(true);
+    auto updateTensor = torch::zeros_like(_opacity);
     // new optimizer
     auto opacity_params = _new_optimizer->GetAdamParameter<gs::optim::opacity_param_t>(gs::optim::ParamType::Opacity);
-    opacity_params->Set_Exp_Avg(reinterpret_cast<gs::optim::opacity_param_t*>(updateTensor.data_ptr<float>()), {static_cast<int>(new_opacity.size(0))});
-    opacity_params->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::opacity_param_t*>(updateTensor.data_ptr<float>()), {static_cast<int>(new_opacity.size(0))});
+    opacity_params->Set_Exp_Avg(reinterpret_cast<gs::optim::opacity_param_t*>(updateTensor.data_ptr<float>()), {static_cast<int>(_opacity.size(0))});
+    opacity_params->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::opacity_param_t*>(updateTensor.data_ptr<float>()), {static_cast<int>(_opacity.size(0))});
 }
 
 void copy3DAsync(const float* src,
@@ -239,104 +220,144 @@ void copy2DAsync(const float* src, const std::vector<long>& src_size, float* dst
     CHECK_LAST_CUDA_ERROR();
 }
 
-void prune_optimizer(torch::optim::Adam* optimizer,
-                     const torch::Tensor& mask,
-                     torch::Tensor& old_tensor,
-                     int param_position,
-                     gs::optim::Adam* new_optimizer,
-                     gs::optim::ParamType param_type) {
-    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
-        *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
-    optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
-
-    const auto exp_avg = adamParamStates->exp_avg().index_select(0, mask);
-    adamParamStates->exp_avg(exp_avg);
-    const auto exp_avg_sq = adamParamStates->exp_avg_sq().index_select(0, mask);
-    adamParamStates->exp_avg_sq(exp_avg_sq);
-
-    optimizer->param_groups()[param_position].params()[0] = old_tensor.index_select(0, mask).set_requires_grad(true);
-    old_tensor = optimizer->param_groups()[param_position].params()[0]; // update old tensor
-    optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
-
-    // new optimizer
-    std::vector<int> shape;
-    for (int i = 0; i < old_tensor.sizes().size(); ++i) {
-        shape.push_back(old_tensor.size(i));
+template <typename T>
+__global__ void index_select_2D_kernel(const T* __restrict__ A,
+                                       T* __restrict__ B,
+                                       const long* __restrict__ indices,
+                                       int size_B) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= size_B) {
+        return;
     }
 
-    // for now this is not good. Will become better.
+    B[row] = A[indices[row]];
+}
+
+template <typename T>
+__global__ void index_select_3D_kernel(const T* __restrict__ A,
+                                       T* __restrict__ B,
+                                       const long* __restrict__ indices,
+                                       int size_B,
+                                       int dim1) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= size_B) {
+        return;
+    }
+
+    for (int i = 0; i < dim1; ++i) {
+        B[row * dim1 + i] = A[indices[row] * dim1 + i];
+    }
+}
+
+template <typename param_t>
+void prune_optimizer(const torch::Tensor& mask,
+                     torch::Tensor& old_tensor,
+                     gs::optim::Adam* new_optimizer,
+                     gs::optim::ParamType param_type,
+                     const std::vector<int>& shape) {
+
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    const int threads = 1024;
+    const int blocks = (mask.size(0) + threads - 1) / threads;
+
+    cudaStream_t stream1;
+    cudaStream_t stream2;
+    cudaStream_t stream3;
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
+    cudaStreamCreate(&stream3);
     switch (param_type) {
-    case gs::optim::ParamType::Pos: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::pos_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::pos_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::pos_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Features_dc: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::feature_dc_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_dc_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_dc_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Features_rest: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::feature_rest_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_rest_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_rest_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Scaling: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::scaling_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::scaling_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::scaling_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Rotation: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::rotation_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::rotation_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::rotation_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
+    case gs::optim::ParamType::Pos:
+    case gs::optim::ParamType::Scaling:
+    case gs::optim::ParamType::Rotation:
     case gs::optim::ParamType::Opacity: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::opacity_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::opacity_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::opacity_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        auto masked_param = torch::zeros({mask.size(0), shape[1]}, options);
+        auto exp_avg = torch::zeros({mask.size(0), shape[1]}, options);
+        auto exp_avg_sq = torch::zeros({mask.size(0), shape[1]}, options);
+        auto param = new_optimizer->GetAdamParameter<param_t>(param_type);
+        index_select_2D_kernel<param_t><<<blocks, threads, 0, stream1>>>(reinterpret_cast<param_t*>(old_tensor.data_ptr<float>()),
+                                                                         reinterpret_cast<param_t*>(masked_param.data_ptr<float>()),
+                                                                         mask.data_ptr<long>(),
+                                                                         static_cast<int>(mask.size(0)));
+
+        index_select_2D_kernel<param_t><<<blocks, threads, 0, stream2>>>(param->Get_Exp_Avg(),
+                                                                         reinterpret_cast<param_t*>(exp_avg.data_ptr<float>()),
+                                                                         mask.data_ptr<long>(),
+                                                                         static_cast<int>(mask.size(0)));
+        index_select_2D_kernel<param_t><<<blocks, threads, 0, stream3>>>(param->Get_Exp_Avg_Sq(),
+                                                                         reinterpret_cast<param_t*>(exp_avg_sq.data_ptr<float>()),
+                                                                         mask.data_ptr<long>(),
+                                                                         static_cast<int>(mask.size(0)));
+        cudaStreamSynchronize(stream1);
+        cudaStreamSynchronize(stream2);
+        cudaStreamSynchronize(stream3);
+        param->Set_Exp_Avg(reinterpret_cast<param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg_Sq(reinterpret_cast<param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        old_tensor = masked_param;
+    } break;
+    case gs::optim::ParamType::Features_dc:
+    case gs::optim::ParamType::Features_rest: {
+        auto masked_param = torch::zeros({mask.size(0), shape[1], shape[2]}, options);
+        auto exp_avg = torch::zeros({mask.size(0), shape[1], shape[2]}, options);
+        auto exp_avg_sq = torch::zeros({mask.size(0), shape[1], shape[2]}, options);
+        auto param = new_optimizer->GetAdamParameter<param_t>(param_type);
+
+        index_select_3D_kernel<param_t><<<blocks, threads, 0, stream1>>>(reinterpret_cast<param_t*>(old_tensor.data_ptr<float>()),
+                                                                         reinterpret_cast<param_t*>(masked_param.data_ptr<float>()),
+                                                                         mask.data_ptr<long>(),
+                                                                         static_cast<int>(mask.size(0)),
+                                                                         static_cast<int>(old_tensor.size(1)));
+
+        index_select_3D_kernel<param_t><<<blocks, threads, 0, stream2>>>(param->Get_Exp_Avg(),
+                                                                         reinterpret_cast<param_t*>(exp_avg.data_ptr<float>()),
+                                                                         mask.data_ptr<long>(),
+                                                                         static_cast<int>(mask.size(0)),
+                                                                         static_cast<int>(old_tensor.size(1)));
+        index_select_3D_kernel<param_t><<<blocks, threads, 0, stream3>>>(param->Get_Exp_Avg_Sq(),
+                                                                         reinterpret_cast<param_t*>(exp_avg_sq.data_ptr<float>()),
+                                                                         mask.data_ptr<long>(),
+                                                                         static_cast<int>(mask.size(0)),
+                                                                         static_cast<int>(old_tensor.size(1)));
+
+        cudaStreamSynchronize(stream1);
+        cudaStreamSynchronize(stream2);
+        cudaStreamSynchronize(stream3);
+        param->Set_Exp_Avg(reinterpret_cast<param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        param->Set_Exp_Avg_Sq(reinterpret_cast<param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+        old_tensor = masked_param;
     } break;
     default:
         throw std::runtime_error("Not implemented cast in tensors_to_optimizer_new");
     }
+
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    cudaStreamDestroy(stream3);
 }
 
 void GaussianModel::prune_points(torch::Tensor mask) {
     // reverse to keep points
     auto valid_point_mask = ~mask;
-    int true_count = valid_point_mask.sum().item<int>();
     auto indices = torch::nonzero(valid_point_mask == true).index({torch::indexing::Slice(torch::indexing::None, torch::indexing::None), torch::indexing::Slice(torch::indexing::None, 1)}).squeeze(-1);
-    prune_optimizer(_optimizer.get(), indices, _xyz, 0, _new_optimizer.get(), gs::optim::ParamType::Pos);
-    prune_optimizer(_optimizer.get(), indices, _features_dc, 1, _new_optimizer.get(), gs::optim::ParamType::Features_dc);
-    prune_optimizer(_optimizer.get(), indices, _features_rest, 2, _new_optimizer.get(), gs::optim::ParamType::Features_rest);
-    prune_optimizer(_optimizer.get(), indices, _scaling, 3, _new_optimizer.get(), gs::optim::ParamType::Scaling);
-    prune_optimizer(_optimizer.get(), indices, _rotation, 4, _new_optimizer.get(), gs::optim::ParamType::Rotation);
-    prune_optimizer(_optimizer.get(), indices, _opacity, 5, _new_optimizer.get(), gs::optim::ParamType::Opacity);
+    prune_optimizer<gs::optim::pos_param_t>(indices, _xyz, _new_optimizer.get(), gs::optim::ParamType::Pos, {static_cast<int>(_xyz.size(0)), static_cast<int>(_xyz.size(1))});
+    prune_optimizer<gs::optim::feature_dc_param_t>(indices, _features_dc, _new_optimizer.get(), gs::optim::ParamType::Features_dc, {static_cast<int>(_features_dc.size(0)), static_cast<int>(_features_dc.size(1)), static_cast<int>(_features_dc.size(2))});
+    prune_optimizer<gs::optim::feature_rest_param_t>(indices, _features_rest, _new_optimizer.get(), gs::optim::ParamType::Features_rest, {static_cast<int>(_features_rest.size(0)), static_cast<int>(_features_rest.size(1)), static_cast<int>(_features_rest.size(2))});
+    prune_optimizer<gs::optim::scaling_param_t>(indices, _scaling, _new_optimizer.get(), gs::optim::ParamType::Scaling, {static_cast<int>(_scaling.size(0)), static_cast<int>(_scaling.size(1))});
+    prune_optimizer<gs::optim::rotation_param_t>(indices, _rotation, _new_optimizer.get(), gs::optim::ParamType::Rotation, {static_cast<int>(_rotation.size(0)), static_cast<int>(_rotation.size(1))});
+    prune_optimizer<gs::optim::opacity_param_t>(indices, _opacity, _new_optimizer.get(), gs::optim::ParamType::Opacity, {static_cast<int>(_opacity.size(0)), static_cast<int>(_opacity.size(1))});
 
     _xyz_gradient_accum = _xyz_gradient_accum.index_select(0, indices);
     _denom = _denom.index_select(0, indices);
     _max_radii2D = _max_radii2D.index_select(0, indices);
 }
 
-void tensors_to_optimizer_new(torch::optim::Adam* optimizer,
-                              torch::Tensor& extended_tensor,
+template <typename param_t>
+void tensors_to_optimizer_new(torch::Tensor& extended_tensor,
                               torch::Tensor& old_tensor,
                               torch::Tensor& exp_avg,
                               torch::Tensor exp_avg_sq,
-                              int param_position,
                               gs::optim::Adam* new_optimizer,
                               gs::optim::ParamType param_type) {
-    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
-        *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
-    optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
-
-    adamParamStates->exp_avg(exp_avg);
-    adamParamStates->exp_avg_sq(exp_avg_sq);
-
-    optimizer->param_groups()[param_position].params()[0] = extended_tensor.clone().set_requires_grad(true);
-    old_tensor = optimizer->param_groups()[param_position].params()[0];
-
-    optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
 
     // new optimizer
     std::vector<int> shape;
@@ -344,59 +365,25 @@ void tensors_to_optimizer_new(torch::optim::Adam* optimizer,
         shape.push_back(extended_tensor.size(i));
     }
 
-    // for now this is not good. Will become better.
-    switch (param_type) {
-    case gs::optim::ParamType::Pos: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::pos_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::pos_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::pos_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Features_dc: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::feature_dc_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_dc_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_dc_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Features_rest: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::feature_rest_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_rest_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_rest_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Scaling: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::scaling_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::scaling_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::scaling_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Rotation: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::rotation_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::rotation_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::rotation_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Opacity: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::opacity_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::opacity_param_t*>(exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::opacity_param_t*>(exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    default:
-        throw std::runtime_error("Not implemented cast in tensors_to_optimizer_new");
-    }
+    auto param = new_optimizer->GetAdamParameter<param_t>(param_type);
+    param->Set_Exp_Avg(reinterpret_cast<param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+    param->Set_Exp_Avg_Sq(reinterpret_cast<param_t*>(exp_avg_sq.data_ptr<float>()), shape);
+    old_tensor = extended_tensor;
 }
 
-void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
-                              torch::Tensor& extension_tensor,
+template <typename param_t>
+void cat_tensors_to_optimizer(torch::Tensor& extension_tensor,
                               torch::Tensor& old_tensor,
-                              int param_position,
                               gs::optim::Adam* new_optimizer,
                               gs::optim::ParamType param_type) {
-    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
-        *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
-    optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
-
     cudaStream_t _stream1;
     cudaStreamCreate(&_stream1);
 
     auto new_exp_avg = torch::tensor({});
     auto new_exp_avg_sq = torch::tensor({});
     const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+
+    auto param = new_optimizer->GetAdamParameter<param_t>(param_type);
 
     torch::Tensor new_tensor;
     if (param_type == gs::optim::ParamType::Features_rest || param_type == gs::optim::ParamType::Features_dc) {
@@ -411,15 +398,17 @@ void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
 
         new_exp_avg = torch::zeros({new_shape[0], new_shape[1], new_shape[2]}, options);
         new_exp_avg_sq = torch::zeros({new_shape[0], new_shape[1], new_shape[2]}, options);
-        copy3DAsync(adamParamStates->exp_avg().data_ptr<float>(), old_shape, new_exp_avg.data_ptr<float>(), new_shape, _stream1);
-        copy3DAsync(adamParamStates->exp_avg_sq().data_ptr<float>(), old_shape, new_exp_avg_sq.data_ptr<float>(), new_shape, _stream1);
+        // TODO need to copy form new optimizer
+        copy3DAsync(reinterpret_cast<float*>(param->Get_Exp_Avg()), old_shape, new_exp_avg.data_ptr<float>(), new_shape, _stream1);
+        copy3DAsync(reinterpret_cast<float*>(param->Get_Exp_Avg_Sq()), old_shape, new_exp_avg_sq.data_ptr<float>(), new_shape, _stream1);
 
         new_tensor = torch::zeros({new_shape[0], new_shape[1], new_shape[2]}, options);
         copy3DAsync(old_tensor.data_ptr<float>(), old_shape, new_tensor.data_ptr<float>(), new_shape, _stream1);
         auto shifted_ptr = new_tensor.data_ptr<float>() + old_shape[0] * old_shape[1] * old_shape[2];
         copy3DAsync(extension_tensor.data_ptr<float>(), extension_shape, shifted_ptr, extension_shape, _stream1);
 
-        new_tensor = torch::cat({old_tensor, extension_tensor}, 0);
+        // TODO: somehow slipped in. Verfiy that it works
+        old_tensor = torch::cat({old_tensor, extension_tensor}, 0);
     } else {
         std::vector<long> old_shape = {static_cast<int>(old_tensor.size(0)), static_cast<int>(old_tensor.size(1))};
         std::vector<long> new_shape = old_shape;
@@ -429,68 +418,27 @@ void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
         new_exp_avg = torch::zeros({new_shape[0], new_shape[1]}, options);
         new_exp_avg_sq = torch::zeros({new_shape[0], new_shape[1]}, options);
 
-        copy2DAsync(adamParamStates->exp_avg().data_ptr<float>(), old_shape, new_exp_avg.data_ptr<float>(), _stream1);
-        copy2DAsync(adamParamStates->exp_avg_sq().data_ptr<float>(), old_shape, new_exp_avg_sq.data_ptr<float>(), _stream1);
-
-        new_exp_avg = torch::cat({adamParamStates->exp_avg(), torch::zeros_like(extension_tensor)}, 0);
-        new_exp_avg_sq = torch::cat({adamParamStates->exp_avg_sq(), torch::zeros_like(extension_tensor)}, 0);
+        // TODO: eed to copy form new optimizer
+        copy2DAsync(reinterpret_cast<float*>(param->Get_Exp_Avg()), old_shape, new_exp_avg.data_ptr<float>(), _stream1);
+        copy2DAsync(reinterpret_cast<float*>(param->Get_Exp_Avg_Sq()), old_shape, new_exp_avg_sq.data_ptr<float>(), _stream1);
 
         new_tensor = torch::zeros({new_shape[0], new_shape[1]}, options);
         copy2DAsync(old_tensor.data_ptr<float>(), old_shape, new_tensor.data_ptr<float>(), _stream1);
         auto shifted_ptr = new_tensor.data_ptr<float>() + old_shape[0] * old_shape[1];
         copy2DAsync(extension_tensor.data_ptr<float>(), extension_shape, shifted_ptr, _stream1);
+        old_tensor = new_tensor;
     }
 
     cudaStreamSynchronize(_stream1);
     cudaStreamDestroy(_stream1);
-    adamParamStates->exp_avg(new_exp_avg);
-    adamParamStates->exp_avg_sq(new_exp_avg_sq);
-
-    optimizer->param_groups()[param_position].params()[0] = new_tensor.set_requires_grad(true);
-    old_tensor = optimizer->param_groups()[param_position].params()[0];
-
-    optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
 
     std::vector<int> shape;
     for (int i = 0; i < old_tensor.sizes().size(); ++i) {
         shape.push_back(old_tensor.size(i));
     }
 
-    // for now this is not good. Will become better.
-    switch (param_type) {
-    case gs::optim::ParamType::Pos: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::pos_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::pos_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::pos_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Features_dc: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::feature_dc_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_dc_param_t*>(new_exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_dc_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Features_rest: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::feature_rest_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::feature_rest_param_t*>(new_exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::feature_rest_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Scaling: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::scaling_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::scaling_param_t*>(new_exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::scaling_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Rotation: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::rotation_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::rotation_param_t*>(new_exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::rotation_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    case gs::optim::ParamType::Opacity: {
-        auto param = new_optimizer->GetAdamParameter<gs::optim::opacity_param_t>(param_type);
-        param->Set_Exp_Avg(reinterpret_cast<gs::optim::opacity_param_t*>(new_exp_avg.data_ptr<float>()), shape);
-        param->Set_Exp_Avg_Sq(reinterpret_cast<gs::optim::opacity_param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
-    } break;
-    default:
-        throw std::runtime_error("Not implemented cast in tensors_to_optimizer_new");
-    }
+    param->Set_Exp_Avg(reinterpret_cast<param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
+    param->Set_Exp_Avg_Sq(reinterpret_cast<param_t*>(new_exp_avg_sq.data_ptr<float>()), shape);
 }
 
 void GaussianModel::densification_postfix(torch::Tensor& new_xyz,
@@ -499,12 +447,12 @@ void GaussianModel::densification_postfix(torch::Tensor& new_xyz,
                                           torch::Tensor& new_scaling,
                                           torch::Tensor& new_rotation,
                                           torch::Tensor& new_opacity) {
-    cat_tensors_to_optimizer(_optimizer.get(), new_xyz, _xyz, 0, _new_optimizer.get(), gs::optim::ParamType::Pos);
-    cat_tensors_to_optimizer(_optimizer.get(), new_features_dc, _features_dc, 1, _new_optimizer.get(), gs::optim::ParamType::Features_dc);
-    cat_tensors_to_optimizer(_optimizer.get(), new_features_rest, _features_rest, 2, _new_optimizer.get(), gs::optim::ParamType::Features_rest);
-    cat_tensors_to_optimizer(_optimizer.get(), new_scaling, _scaling, 3, _new_optimizer.get(), gs::optim::ParamType::Scaling);
-    cat_tensors_to_optimizer(_optimizer.get(), new_rotation, _rotation, 4, _new_optimizer.get(), gs::optim::ParamType::Rotation);
-    cat_tensors_to_optimizer(_optimizer.get(), new_opacity, _opacity, 5, _new_optimizer.get(), gs::optim::ParamType::Opacity);
+    cat_tensors_to_optimizer<gs::optim::pos_param_t>(new_xyz, _xyz, _new_optimizer.get(), gs::optim::ParamType::Pos);
+    cat_tensors_to_optimizer<gs::optim::feature_dc_param_t>(new_features_dc, _features_dc, _new_optimizer.get(), gs::optim::ParamType::Features_dc);
+    cat_tensors_to_optimizer<gs::optim::feature_rest_param_t>(new_features_rest, _features_rest, _new_optimizer.get(), gs::optim::ParamType::Features_rest);
+    cat_tensors_to_optimizer<gs::optim::scaling_param_t>(new_scaling, _scaling, _new_optimizer.get(), gs::optim::ParamType::Scaling);
+    cat_tensors_to_optimizer<gs::optim::rotation_param_t>(new_rotation, _rotation, _new_optimizer.get(), gs::optim::ParamType::Rotation);
+    cat_tensors_to_optimizer<gs::optim::opacity_param_t>(new_opacity, _opacity, _new_optimizer.get(), gs::optim::ParamType::Opacity);
 
     _xyz_gradient_accum = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
     _denom = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
@@ -539,49 +487,6 @@ void GaussianModel::densify_and_split(torch::Tensor& grads, float grad_threshold
     // torch::Tensor prune_filter = torch::cat({selected_pts_mask.squeeze(-1), torch::zeros({N * selected_pts_mask.sum().item<int>()})}).to(torch::kBool).to(torch::kCUDA);
     prune_filter = torch::logical_or(prune_filter, (Get_opacity() < min_opacity).squeeze(-1));
     prune_points(prune_filter);
-}
-
-__global__ void concat_4dim_kernel(
-    const float* __restrict__ xyz,
-    const int64_t* __restrict__ indices,
-    float* __restrict__ new_xyz,
-    const size_t N,
-    const size_t orig_N) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N) {
-        return;
-    }
-
-    // Copy selected elements to new tensors, at positions after the original elements
-    const int64_t index = indices[idx];
-    const int64_t dest_idx = orig_N + idx;
-
-    new_xyz[dest_idx * 3] = xyz[index * 3];
-    new_xyz[dest_idx * 3 + 1] = xyz[index * 3 + 1];
-    new_xyz[dest_idx * 3 + 2] = xyz[index * 3 + 2];
-    new_xyz[dest_idx * 3 + 3] = xyz[index * 3 + 3];
-}
-
-__global__ void concat_2dim_kernel(
-    const float* __restrict__ src,
-    const int64_t* __restrict__ indices,
-    float* __restrict__ dst,
-    int64_t dim0,
-    int64_t dim1,
-    const long N,
-    const long orig_N) {
-    const long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N) {
-        return;
-    }
-
-    // Copy selected elements to new tensors, at positions after the original elements
-    const int64_t index = indices[idx];
-    const int64_t dest_idx = orig_N + idx;
-
-    for (long i = 0; i < dim1; i++) {
-        dst[dest_idx * dim1 + i] = src[index * dim1 + i];
-    }
 }
 
 __global__ void concat_selection_float3_kernel(
@@ -665,8 +570,7 @@ __global__ void concat_elements_kernel_features_rest(
     float3* __restrict__ new_features_rest,
     const size_t N,
     const size_t orig_N,
-    const size_t F1,
-    const size_t F2) {
+    const size_t F1) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N) {
         return;
@@ -716,12 +620,12 @@ void GaussianModel::select_elements_and_cat(
     long blocks = std::max(1L, (extension_size + threads - 1L) / threads);
     {
 
-        const auto& xyz_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[0].params()[0].unsafeGetTensorImpl())]);
-        const auto& features_dc_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[1].params()[0].unsafeGetTensorImpl())]);
-        const auto& features_rest_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[2].params()[0].unsafeGetTensorImpl())]);
-        const auto& scaling_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[3].params()[0].unsafeGetTensorImpl())]);
-        const auto& rotation_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[4].params()[0].unsafeGetTensorImpl())]);
-        const auto& opacity_paramstates = static_cast<torch::optim::AdamParamState&>(*_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl())]);
+        auto xyz_paramstates = _new_optimizer->GetAdamParameter<gs::optim::pos_param_t>(gs::optim::ParamType::Pos);
+        auto features_dc_paramstates = _new_optimizer->GetAdamParameter<gs::optim::feature_dc_param_t>(gs::optim::ParamType::Features_dc);
+        auto features_rest_paramstates = _new_optimizer->GetAdamParameter<gs::optim::feature_rest_param_t>(gs::optim::ParamType::Features_rest);
+        auto scaling_paramstates = _new_optimizer->GetAdamParameter<gs::optim::scaling_param_t>(gs::optim::ParamType::Scaling);
+        auto rotation_paramstates = _new_optimizer->GetAdamParameter<gs::optim::rotation_param_t>(gs::optim::ParamType::Rotation);
+        auto opacity_paramstates = _new_optimizer->GetAdamParameter<gs::optim::opacity_param_t>(gs::optim::ParamType::Opacity);
 
         const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
         auto new_xyz = torch::zeros({_xyz.size(0) + extension_size, _xyz.size(1)}, options);
@@ -745,23 +649,25 @@ void GaussianModel::select_elements_and_cat(
         auto rotation_avg = torch::zeros({total_extension_count, _rotation.size(1)}, options);
         auto rotation_avg_sq = torch::zeros({total_extension_count, _rotation.size(1)}, options);
 
-        copy2DAsync(xyz_paramstates.exp_avg().data_ptr<float>(), {original_size, 3}, xyz_exp_avg.data_ptr<float>(), _stream1);
-        copy2DAsync(xyz_paramstates.exp_avg_sq().data_ptr<float>(), {original_size, 3}, xyz_exp_avg_sq.data_ptr<float>(), _stream1);
+        // TODO: no reinterpret_cast -> refactor accordingly. Should be also faster if we take the native floatx type?
+        copy2DAsync(reinterpret_cast<float*>(xyz_paramstates->Get_Exp_Avg()), {original_size, 3}, xyz_exp_avg.data_ptr<float>(), _stream1);
+        copy2DAsync(reinterpret_cast<float*>(xyz_paramstates->Get_Exp_Avg_Sq()), {original_size, 3}, xyz_exp_avg_sq.data_ptr<float>(), _stream1);
 
-        copy3DAsync(features_dc_paramstates.exp_avg().data_ptr<float>(), features_dc_size, features_dc_avg.data_ptr<float>(), {original_size + extension_size, features_dc_size[1], features_dc_size[2]}, _stream2);
-        copy3DAsync(features_dc_paramstates.exp_avg_sq().data_ptr<float>(), features_dc_size, features_dc_avg_sq.data_ptr<float>(), {original_size + extension_size, features_dc_size[1], features_dc_size[2]}, _stream2);
+        copy3DAsync(reinterpret_cast<float*>(features_dc_paramstates->Get_Exp_Avg()), features_dc_size, features_dc_avg.data_ptr<float>(), {original_size + extension_size, features_dc_size[1], features_dc_size[2]}, _stream2);
+        copy3DAsync(reinterpret_cast<float*>(features_dc_paramstates->Get_Exp_Avg_Sq()), features_dc_size, features_dc_avg_sq.data_ptr<float>(), {original_size + extension_size, features_dc_size[1], features_dc_size[2]}, _stream2);
 
-        copy3DAsync(features_rest_paramstates.exp_avg().data_ptr<float>(), features_rest_size, features_rest_avg.data_ptr<float>(), {original_size + extension_size, features_rest_size[1], features_rest_size[2]}, _stream3);
-        copy3DAsync(features_rest_paramstates.exp_avg_sq().data_ptr<float>(), features_rest_size, features_rest_avg_sq.data_ptr<float>(), {original_size + extension_size, features_rest_size[1], features_rest_size[2]}, _stream3);
+        copy3DAsync(reinterpret_cast<float*>(features_rest_paramstates->Get_Exp_Avg()), features_rest_size, features_rest_avg.data_ptr<float>(), {original_size + extension_size, features_rest_size[1], features_rest_size[2]}, _stream3);
+        copy3DAsync(reinterpret_cast<float*>(features_rest_paramstates->Get_Exp_Avg_Sq()), features_rest_size, features_rest_avg_sq.data_ptr<float>(), {original_size + extension_size, features_rest_size[1], features_rest_size[2]}, _stream3);
 
-        copy2DAsync(opacity_paramstates.exp_avg().data_ptr<float>(), {original_size, 1}, opacity_avg.data_ptr<float>(), _stream4);
-        copy2DAsync(opacity_paramstates.exp_avg_sq().data_ptr<float>(), {original_size, 1}, opacity_avg_sq.data_ptr<float>(), _stream4);
+        // opacity is already float*
+        copy2DAsync(opacity_paramstates->Get_Exp_Avg(), {original_size, 1}, opacity_avg.data_ptr<float>(), _stream4);
+        copy2DAsync(opacity_paramstates->Get_Exp_Avg_Sq(), {original_size, 1}, opacity_avg_sq.data_ptr<float>(), _stream4);
 
-        copy2DAsync(scaling_paramstates.exp_avg().data_ptr<float>(), {original_size, 3}, scaling_avg.data_ptr<float>(), _stream5);
-        copy2DAsync(scaling_paramstates.exp_avg_sq().data_ptr<float>(), {original_size, 3}, scaling_avg_sq.data_ptr<float>(), _stream5);
+        copy2DAsync(reinterpret_cast<float*>(scaling_paramstates->Get_Exp_Avg()), {original_size, 3}, scaling_avg.data_ptr<float>(), _stream5);
+        copy2DAsync(reinterpret_cast<float*>(scaling_paramstates->Get_Exp_Avg_Sq()), {original_size, 3}, scaling_avg_sq.data_ptr<float>(), _stream5);
 
-        copy2DAsync(rotation_paramstates.exp_avg().data_ptr<float>(), {original_size, 4}, rotation_avg.data_ptr<float>(), _stream6);
-        copy2DAsync(rotation_paramstates.exp_avg_sq().data_ptr<float>(), {original_size, 4}, rotation_avg_sq.data_ptr<float>(), _stream6);
+        copy2DAsync(reinterpret_cast<float*>(rotation_paramstates->Get_Exp_Avg()), {original_size, 4}, rotation_avg.data_ptr<float>(), _stream6);
+        copy2DAsync(reinterpret_cast<float*>(rotation_paramstates->Get_Exp_Avg_Sq()), {original_size, 4}, rotation_avg_sq.data_ptr<float>(), _stream6);
 
         copy2DAsync(xyz, xyz_size, new_xyz.data_ptr<float>(), _stream1);
         const auto* xyz3_ptr = reinterpret_cast<const float3*>(xyz);
@@ -806,7 +712,7 @@ void GaussianModel::select_elements_and_cat(
             indices,
             new_features_rest_ptr,
             extension_size,
-            features_rest_size[0], features_rest_size[1], features_rest_size[2]);
+            features_rest_size[0], features_rest_size[1]);
         CHECK_LAST_CUDA_ERROR();
 
         copy2DAsync(rotation, rotation_size, new_rotation.data_ptr<float>(), _stream6);
@@ -832,12 +738,12 @@ void GaussianModel::select_elements_and_cat(
         CHECK_LAST_CUDA_ERROR();
         cudaStreamSynchronize(_stream6);
 
-        tensors_to_optimizer_new(_optimizer.get(), new_xyz, _xyz, xyz_exp_avg, xyz_exp_avg_sq, 0, _new_optimizer.get(), gs::optim::ParamType::Pos);
-        tensors_to_optimizer_new(_optimizer.get(), new_features_dc, _features_dc, features_dc_avg, features_dc_avg_sq, 1, _new_optimizer.get(), gs::optim::ParamType::Features_dc);
-        tensors_to_optimizer_new(_optimizer.get(), new_features_rest, _features_rest, features_rest_avg, features_rest_avg_sq, 2, _new_optimizer.get(), gs::optim::ParamType::Features_rest);
-        tensors_to_optimizer_new(_optimizer.get(), new_opacity, _opacity, opacity_avg, opacity_avg_sq, 5, _new_optimizer.get(), gs::optim::ParamType::Opacity);
-        tensors_to_optimizer_new(_optimizer.get(), new_scaling, _scaling, scaling_avg, scaling_avg_sq, 3, _new_optimizer.get(), gs::optim::ParamType::Scaling);
-        tensors_to_optimizer_new(_optimizer.get(), new_rotation, _rotation, rotation_avg, rotation_avg_sq, 4, _new_optimizer.get(), gs::optim::ParamType::Rotation);
+        tensors_to_optimizer_new<gs::optim::pos_param_t>(new_xyz, _xyz, xyz_exp_avg, xyz_exp_avg_sq, _new_optimizer.get(), gs::optim::ParamType::Pos);
+        tensors_to_optimizer_new<gs::optim::feature_dc_param_t>(new_features_dc, _features_dc, features_dc_avg, features_dc_avg_sq, _new_optimizer.get(), gs::optim::ParamType::Features_dc);
+        tensors_to_optimizer_new<gs::optim::feature_rest_param_t>(new_features_rest, _features_rest, features_rest_avg, features_rest_avg_sq, _new_optimizer.get(), gs::optim::ParamType::Features_rest);
+        tensors_to_optimizer_new<gs::optim::opacity_param_t>(new_opacity, _opacity, opacity_avg, opacity_avg_sq, _new_optimizer.get(), gs::optim::ParamType::Opacity);
+        tensors_to_optimizer_new<gs::optim::scaling_param_t>(new_scaling, _scaling, scaling_avg, scaling_avg_sq, _new_optimizer.get(), gs::optim::ParamType::Scaling);
+        tensors_to_optimizer_new<gs::optim::rotation_param_t>(new_rotation, _rotation, rotation_avg, rotation_avg_sq, _new_optimizer.get(), gs::optim::ParamType::Rotation);
     }
 
     CHECK_LAST_CUDA_ERROR();

@@ -31,6 +31,15 @@ namespace gs {
             torch::Tensor cov3Ds_precomp;
         };
 
+        struct RasterizerOutput {
+            int num_rendered;
+            torch::Tensor out_color;
+            torch::Tensor radii;
+            torch::Tensor geomBuffer;
+            torch::Tensor binningBuffer;
+            torch::Tensor imgBuffer;
+        };
+
         using Forward_Output = std::tuple<torch::Tensor, torch::Tensor>;
 
         using Backward_Output = std::tuple<torch::Tensor,
@@ -43,9 +52,13 @@ namespace gs {
                                            torch::Tensor>;
 
     public:
-        GaussianRasterizer(RasterizerInput raster_settings) : raster_settings_(raster_settings) {}
+        GaussianRasterizer() = default;
 
-        Forward_Output forward(torch::Tensor means3D,
+        void SetRasterizerInput(RasterizerInput raster_settings) {
+            _raster_input = raster_settings;
+        }
+
+        Forward_Output Forward(torch::Tensor means3D,
                                torch::Tensor means2D,
                                torch::Tensor opacities,
                                torch::Tensor shs = torch::Tensor(),
@@ -54,10 +67,11 @@ namespace gs {
                                torch::Tensor rotations = torch::Tensor(),
                                torch::Tensor cov3D_precomp = torch::Tensor());
 
-        Backward_Output backward(torch::autograd::AutogradContext* ctx, torch::autograd::tensor_list grad_outputs);
+        Backward_Output Backward(const torch::Tensor& grad_out_color);
 
     private:
-        RasterizerInput raster_settings_;
+        RasterizerInput _raster_input;
+        RasterizerOutput _raster_output;
     };
 
 } // namespace gs

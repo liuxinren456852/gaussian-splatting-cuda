@@ -13,8 +13,8 @@
 inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> render(Camera& viewpoint_camera,
                                                                                      GaussianModel& gaussianModel,
                                                                                      torch::Tensor& bg_color,
-                                                                                     float scaling_modifier = 1.0,
-                                                                                     torch::Tensor override_color = torch::empty({})) {
+                                                                                     gs::GaussianRasterizer& rasterizer,
+                                                                                     float scaling_modifier = 1.0) {
     // Ensure background tensor (bg_color) is on GPU!
     bg_color = bg_color.to(torch::kCUDA);
 
@@ -32,7 +32,7 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
         .camera_center = viewpoint_camera.Get_camera_center(),
         .prefiltered = false};
 
-    auto rasterizer = gs::GaussianRasterizer(raster_settings);
+    rasterizer.SetRasterizerInput(raster_settings);
 
     auto means3D = gaussianModel.Get_xyz();
     auto means2D = torch::zeros_like(gaussianModel.Get_xyz()).requires_grad_(true);
@@ -53,7 +53,7 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
     torch::cuda::synchronize();
 
     // Rasterize visible Gaussians to image, obtain their radii (on screen).
-    auto [rendererd_image, radii] = rasterizer.forward(
+    auto [rendererd_image, radii] = rasterizer.Forward(
         means3D,
         means2D,
         opacity,
