@@ -132,15 +132,171 @@ void GaussianModel::Reset_opacity() {
     _optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
 }
 
-void prune_optimizer(torch::optim::Adam* optimizer, const torch::Tensor& mask, torch::Tensor& old_tensor, int param_position) {
+template <typename T>
+__global__ void index_select_2D_kernel(const T* __restrict__ A,
+                                       T* __restrict__ B,
+                                       const long* __restrict__ indices,
+                                       int size_B) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= size_B) {
+        return;
+    }
+
+    B[row] = A[indices[row]];
+}
+
+template <typename T>
+__global__ void index_select_3D_kernel(const T* __restrict__ A,
+                                       T* __restrict__ B,
+                                       const long* __restrict__ indices,
+                                       int size_B,
+                                       int dim1) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= size_B) {
+        return;
+    }
+
+    for (int i = 0; i < dim1; ++i) {
+        B[row * dim1 + i] = A[indices[row] * dim1 + i];
+    }
+}
+
+void prune_optimizer(torch::optim::Adam* optimizer, torch::Tensor mask, torch::Tensor& old_tensor, int param_position) {
     auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
         *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
     optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
 
-    adamParamStates->exp_avg(adamParamStates->exp_avg().index_select(0, mask));
-    adamParamStates->exp_avg_sq(adamParamStates->exp_avg_sq().index_select(0, mask));
+    cudaStream_t stream1;
+    cudaStream_t stream2;
+    cudaStream_t stream3;
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
+    cudaStreamCreate(&stream3);
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    const int threads = 1024;
+    const int blocks = (mask.size(0) + threads - 1) / threads;
+    switch (param_position) {
+    case 0:
+    case 3: { // xyz and scaling
+        auto selection = torch::zeros({mask.size(0), 3}, options);
+        auto selection1 = torch::zeros({mask.size(0), 3}, options);
+        auto selection2 = torch::zeros({mask.size(0), 3}, options);
+        index_select_2D_kernel<float3><<<blocks, threads, 0, stream1>>>(reinterpret_cast<float3*>(old_tensor.data_ptr<float>()),
+                                                                        reinterpret_cast<float3*>(selection.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)));
+        ts::CHECK_LAST_CUDA_ERROR();
 
-    optimizer->param_groups()[param_position].params()[0] = old_tensor.index_select(0, mask).set_requires_grad(true);
+        index_select_2D_kernel<float3><<<blocks, threads, 0, stream2>>>(reinterpret_cast<float3*>(adamParamStates->exp_avg().data_ptr<float>()),
+                                                                        reinterpret_cast<float3*>(selection1.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)));
+        ts::CHECK_LAST_CUDA_ERROR();
+        index_select_2D_kernel<float3><<<blocks, threads, 0, stream3>>>(reinterpret_cast<float3*>(adamParamStates->exp_avg_sq().data_ptr<float>()),
+                                                                        reinterpret_cast<float3*>(selection2.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)));
+        ts::CHECK_LAST_CUDA_ERROR();
+        cudaStreamSynchronize(stream1);
+        cudaStreamSynchronize(stream2);
+        cudaStreamSynchronize(stream3);
+        optimizer->param_groups()[param_position].params()[0] = selection.set_requires_grad(true);
+        adamParamStates->exp_avg(selection1);
+        adamParamStates->exp_avg_sq(selection2);
+    } break;
+    case 1:
+    case 2: { // features_dc and features_rest
+        auto selection = torch::zeros({mask.size(0), old_tensor.size(1), old_tensor.size(2)}, options);
+        auto selection1 = torch::zeros({mask.size(0), old_tensor.size(1), old_tensor.size(2)}, options);
+        auto selection2 = torch::zeros({mask.size(0), old_tensor.size(1), old_tensor.size(2)}, options);
+        index_select_3D_kernel<float3><<<blocks, threads, 0, stream1>>>(reinterpret_cast<float3*>(old_tensor.data_ptr<float>()),
+                                                                        reinterpret_cast<float3*>(selection.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)),
+                                                                        static_cast<int>(old_tensor.size(1)));
+
+        ts::CHECK_LAST_CUDA_ERROR();
+        index_select_3D_kernel<float3><<<blocks, threads, 0, stream2>>>(reinterpret_cast<float3*>(adamParamStates->exp_avg().data_ptr<float>()),
+                                                                        reinterpret_cast<float3*>(selection1.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)),
+                                                                        static_cast<int>(old_tensor.size(1)));
+        ts::CHECK_LAST_CUDA_ERROR();
+        index_select_3D_kernel<float3><<<blocks, threads, 0, stream3>>>(reinterpret_cast<float3*>(adamParamStates->exp_avg_sq().data_ptr<float>()),
+                                                                        reinterpret_cast<float3*>(selection2.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)),
+                                                                        static_cast<int>(old_tensor.size(1)));
+
+        ts::CHECK_LAST_CUDA_ERROR();
+        cudaStreamSynchronize(stream1);
+        cudaStreamSynchronize(stream2);
+        cudaStreamSynchronize(stream3);
+        adamParamStates->exp_avg(selection1);
+        optimizer->param_groups()[param_position].params()[0] = selection.set_requires_grad(true);
+        adamParamStates->exp_avg_sq(selection2);
+    } break;
+    case 4: { // rotation
+        auto selection = torch::zeros({mask.size(0), 4}, options);
+        auto selection1 = torch::zeros({mask.size(0), 4}, options);
+        auto selection2 = torch::zeros({mask.size(0), 4}, options);
+        index_select_2D_kernel<float4><<<blocks, threads, 0, stream1>>>(reinterpret_cast<float4*>(old_tensor.data_ptr<float>()),
+                                                                        reinterpret_cast<float4*>(selection.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)));
+
+        ts::CHECK_LAST_CUDA_ERROR();
+        index_select_2D_kernel<float4><<<blocks, threads, 0, stream2>>>(reinterpret_cast<float4*>(adamParamStates->exp_avg().data_ptr<float>()),
+                                                                        reinterpret_cast<float4*>(selection1.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)));
+        ts::CHECK_LAST_CUDA_ERROR();
+        index_select_2D_kernel<float4><<<blocks, threads, 0, stream3>>>(reinterpret_cast<float4*>(adamParamStates->exp_avg_sq().data_ptr<float>()),
+                                                                        reinterpret_cast<float4*>(selection2.data_ptr<float>()),
+                                                                        mask.data_ptr<long>(),
+                                                                        static_cast<int>(mask.size(0)));
+        ts::CHECK_LAST_CUDA_ERROR();
+        cudaStreamSynchronize(stream1);
+        cudaStreamSynchronize(stream2);
+        cudaStreamSynchronize(stream3);
+        optimizer->param_groups()[param_position].params()[0] = selection.set_requires_grad(true);
+        adamParamStates->exp_avg(selection1);
+        adamParamStates->exp_avg_sq(selection2);
+    } break;
+    case 5: { // opacit
+        auto selection = torch::ones({mask.size(0), 1}, options);
+        auto selection1 = torch::ones({mask.size(0), 1}, options);
+        auto selection2 = torch::ones({mask.size(0), 1}, options);
+        index_select_2D_kernel<float><<<blocks, threads, 0, stream1>>>(old_tensor.data_ptr<float>(),
+                                                                       selection.data_ptr<float>(),
+                                                                       mask.data_ptr<long>(),
+                                                                       static_cast<int>(mask.size(0)));
+        ts::CHECK_LAST_CUDA_ERROR();
+        index_select_2D_kernel<float><<<blocks, threads, 0, stream2>>>(adamParamStates->exp_avg().data_ptr<float>(),
+                                                                       selection1.data_ptr<float>(),
+                                                                       mask.data_ptr<long>(),
+                                                                       static_cast<int>(mask.size(0)));
+        ts::CHECK_LAST_CUDA_ERROR();
+        index_select_2D_kernel<float><<<blocks, threads, 0, stream3>>>(adamParamStates->exp_avg_sq().data_ptr<float>(),
+                                                                       selection2.data_ptr<float>(),
+                                                                       mask.data_ptr<long>(),
+                                                                       static_cast<int>(mask.size(0)));
+
+        cudaStreamSynchronize(stream1);
+        cudaStreamSynchronize(stream2);
+        cudaStreamSynchronize(stream3);
+        optimizer->param_groups()[param_position].params()[0] = selection.set_requires_grad(true);
+        optimizer->param_groups()[param_position].params()[0] = selection.set_requires_grad(true);
+        adamParamStates->exp_avg(selection1);
+        adamParamStates->exp_avg_sq(selection2);
+    } break;
+    default:
+        throw std::runtime_error("Invalid param_position prune_optimizer");
+    }
+
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    cudaStreamDestroy(stream3);
     old_tensor = optimizer->param_groups()[param_position].params()[0]; // update old tensor
     optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
 }
@@ -148,7 +304,6 @@ void prune_optimizer(torch::optim::Adam* optimizer, const torch::Tensor& mask, t
 void GaussianModel::prune_points(torch::Tensor mask) {
     // reverse to keep points
     auto valid_point_mask = ~mask;
-    int true_count = valid_point_mask.sum().item<int>();
     auto indices = torch::nonzero(valid_point_mask == true).index({torch::indexing::Slice(torch::indexing::None, torch::indexing::None), torch::indexing::Slice(torch::indexing::None, 1)}).squeeze(-1);
     prune_optimizer(_optimizer.get(), indices, _xyz, 0);
     prune_optimizer(_optimizer.get(), indices, _features_dc, 1);
