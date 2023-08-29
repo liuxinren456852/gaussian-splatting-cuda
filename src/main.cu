@@ -254,6 +254,7 @@ int main(int argc, char* argv[]) {
 
             //  Optimizer step
             if (iter < optimParams.iterations) {
+                gaussians._new_optimizer->Step();
                 gaussians._optimizer->step();
                 gaussians._optimizer->zero_grad(true);
                 // @TODO: Not sure about type

@@ -4,8 +4,8 @@
 
 #include "camera.cuh"
 #include "gaussian.cuh"
+#include "gaussian_rasterizer.cuh"
 #include "parameters.cuh"
-#include "rasterizer.cuh"
 #include "sh_utils.cuh"
 #include <cmath>
 #include <torch/torch.h>
@@ -19,7 +19,7 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
     bg_color = bg_color.to(torch::kCUDA);
 
     // Set up rasterization configuration
-    GaussianRasterizationSettings raster_settings = {
+    gs::GaussianRasterizer::RasterizerInput raster_settings = {
         .image_height = static_cast<int>(viewpoint_camera.Get_image_height()),
         .image_width = static_cast<int>(viewpoint_camera.Get_image_width()),
         .tanfovx = std::tan(viewpoint_camera.Get_FoVx() * 0.5f),
@@ -32,7 +32,7 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
         .camera_center = viewpoint_camera.Get_camera_center(),
         .prefiltered = false};
 
-    GaussianRasterizer rasterizer = GaussianRasterizer(raster_settings);
+    auto rasterizer = gs::GaussianRasterizer(raster_settings);
 
     auto means3D = gaussianModel.Get_xyz();
     auto means2D = torch::zeros_like(gaussianModel.Get_xyz()).requires_grad_(true);
@@ -62,6 +62,8 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
         scales,
         rotations,
         cov3D_precomp);
+
+    // rasterizer.backward();
 
     // Apply visibility filter to remove occluded Gaussians.
     // TODO: I think there is no real use for means2D, isn't it?

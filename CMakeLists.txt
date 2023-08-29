@@ -48,7 +48,7 @@ set(HEADERS
         includes/parameters.cuh
         includes/loss_utils.cuh
         includes/render_utils.cuh
-        includes/rasterizer.cuh
+        includes/gaussian_rasterizer.cuh
         includes/rasterize_points.cuh
         includes/camera_info.cuh
         includes/debug_utils.cuh
@@ -73,7 +73,7 @@ set(SOURCES
         src/scene.cu
         src/camera_utils.cu
         src/general_utils.cu
-        src/rasterizer.cu
+        src/gaussian_rasterizer.cu
         src/rasterize_points.cu
         src/memory.cu
         src/tensor.cu
@@ -194,7 +194,7 @@ if(BUILD_TESTS)
             src/scene.cu
             src/camera_utils.cu
             src/general_utils.cu
-            src/rasterizer.cu
+            src/gaussian_rasterizer.cu
             src/rasterize_points.cu
             src/read_utils.cu
             tests/render_test.cu

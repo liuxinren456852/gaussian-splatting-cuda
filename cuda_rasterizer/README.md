@@ -1,4 +1,4 @@
-# Differential Gaussian Rasterization
+#Differential Gaussian Rasterization
 
 I've removed it as a submodule and integrated it directly into my repo for a more streamlined CUDA optimization experience. 
 If the results are satisfactory, I'll attempt to push the changes to the original [repositoy](https://github.com/graphdeco-inria/diff-gaussian-rasterization).
