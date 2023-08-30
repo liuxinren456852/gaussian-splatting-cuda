@@ -268,7 +268,7 @@ int main(int argc, char* argv[]) {
             //  Optimizer step
             if (iter < optimParams.iterations) {
                 // TODO: Zero_grad? Do we need this?
-                gaussians._new_optimizer->Step();
+                gaussians._optimizer->Step();
                 gaussians.Update_learning_rate(iter);
             }
 
