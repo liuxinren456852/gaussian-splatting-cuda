@@ -137,6 +137,15 @@ namespace gs {
                          binningBuffer_copy,
                          imgBuffer_copy);
 #endif
+        //        ts::print_debug_info(grad_means3D, "grad_means3D");
+        //        ts::print_debug_info(grad_means2D, "grad_means2D");
+        //        ts::print_debug_info(grad_sh, "grad_sh");
+        //        ts::print_debug_info(grad_colors_precomp, "grad_colors_precomp");
+        //        ts::print_debug_info(grad_opacities, "grad_opacities");
+        //        ts::print_debug_info(grad_scales, "grad_scales");
+        //        ts::print_debug_info(grad_rotations, "grad_rotations");
+        //        ts::print_debug_info(grad_cov3Ds_precomp, "grad_cov3Ds_precomp");
+
         return {grad_means3D,
                 grad_means2D,
                 grad_sh,

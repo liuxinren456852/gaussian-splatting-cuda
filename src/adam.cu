@@ -204,6 +204,17 @@ namespace gs {
             CHECK_CUDA_ERROR(cudaMallocAsync(&_d_avg, sizeof(T) * numel, _stream));
             CHECK_CUDA_ERROR(cudaMemcpyAsync(_d_avg, d_avg, sizeof(T) * numel, cudaMemcpyDeviceToDevice, _stream));
         }
+        template <typename T>
+        void AdamParameter<T>::Set_Gradient(T* d_param_grad, std::vector<int> size) {
+            int numel = 1;
+            int total = std::max(1, static_cast<int>(size.size() - 1));
+            for (int i = 0; i < total; ++i) {
+                numel *= size[i];
+            }
+            CHECK_CUDA_ERROR(cudaFree(_d_params_grad));
+            CHECK_CUDA_ERROR(cudaMallocAsync(&_d_params_grad, sizeof(T) * numel, _stream));
+            CHECK_CUDA_ERROR(cudaMemcpyAsync(_d_params_grad, d_param_grad, sizeof(T) * numel, cudaMemcpyDeviceToDevice, _stream));
+        }
 
         void Adam::Sync() {
             for (auto& [key, param] : _params) {

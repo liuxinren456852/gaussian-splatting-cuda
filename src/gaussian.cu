@@ -137,7 +137,11 @@ void GaussianModel::Update_learning_rate(float iteration) {
     _optimizer->GetParameters(gs::optim::ParamType::Pos)->UpdateLearningRate(lr);
 }
 
-void GaussianModel::Update_Parameter_Pointer() {
+void GaussianModel::Update_Params_and_Grads(const torch::Tensor& grad_means3D,
+                                            const torch::Tensor& grad_sh, // needs to be splitted
+                                            const torch::Tensor& grad_opacities,
+                                            const torch::Tensor& grad_scales,
+                                            const torch::Tensor& grad_rotations) {
     auto xyz = reinterpret_cast<gs::optim::pos_param_t*>(_xyz.data_ptr<float>());
     auto features_dc = reinterpret_cast<gs::optim::feature_dc_param_t*>(_features_dc.data_ptr<float>());
     auto features_rest = reinterpret_cast<gs::optim::feature_rest_param_t*>(_features_rest.data_ptr<float>());
@@ -151,6 +155,16 @@ void GaussianModel::Update_Parameter_Pointer() {
     _optimizer->GetAdamParameter<gs::optim::scaling_param_t>(gs::optim::ParamType::Scaling)->Update_Parameter_Pointer(scaling);
     _optimizer->GetAdamParameter<gs::optim::rotation_param_t>(gs::optim::ParamType::Rotation)->Update_Parameter_Pointer(rotation);
     _optimizer->GetAdamParameter<gs::optim::opacity_param_t>(gs::optim::ParamType::Opacity)->Update_Parameter_Pointer(opacity);
+
+    auto grad_features_dc = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1), torch::indexing::Slice()}).contiguous();
+    auto grad_features_rest = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None), torch::indexing::Slice()}).contiguous();
+
+    _optimizer->GetAdamParameter<gs::optim::pos_param_t>(gs::optim::ParamType::Pos)->Set_Gradient(reinterpret_cast<gs::optim::pos_param_t*>(grad_means3D.data_ptr<float>()), {static_cast<int>(grad_means3D.size(0), 3)});
+    _optimizer->GetAdamParameter<gs::optim::feature_dc_param_t>(gs::optim::ParamType::Features_dc)->Set_Gradient(reinterpret_cast<gs::optim::feature_dc_param_t*>(grad_features_dc.data_ptr<float>()), {static_cast<int>(grad_features_dc.size(0)), static_cast<int>(grad_features_dc.size(1)), static_cast<int>(grad_features_dc.size(2))});
+    _optimizer->GetAdamParameter<gs::optim::feature_rest_param_t>(gs::optim::ParamType::Features_rest)->Set_Gradient(reinterpret_cast<gs::optim::feature_rest_param_t*>(grad_features_rest.data_ptr<float>()), {static_cast<int>(grad_features_rest.size(0)), static_cast<int>(grad_features_rest.size(1)), static_cast<int>(grad_features_rest.size(2))});
+    _optimizer->GetAdamParameter<gs::optim::scaling_param_t>(gs::optim::ParamType::Scaling)->Set_Gradient(reinterpret_cast<gs::optim::scaling_param_t*>(grad_scales.data_ptr<float>()), {static_cast<int>(grad_scales.size(0)), static_cast<int>(grad_scales.size(1))});
+    _optimizer->GetAdamParameter<gs::optim::rotation_param_t>(gs::optim::ParamType::Rotation)->Set_Gradient(reinterpret_cast<gs::optim::rotation_param_t*>(grad_rotations.data_ptr<float>()), {static_cast<int>(grad_rotations.size(0)), static_cast<int>(grad_rotations.size(1))});
+    _optimizer->GetAdamParameter<gs::optim::opacity_param_t>(gs::optim::ParamType::Opacity)->Set_Gradient(reinterpret_cast<gs::optim::opacity_param_t*>(grad_opacities.data_ptr<float>()), {static_cast<int>(grad_opacities.size(0)), static_cast<int>(grad_opacities.size(1))});
 }
 
 void GaussianModel::Reset_opacity() {
@@ -471,6 +485,7 @@ void GaussianModel::densify_and_split(torch::Tensor& grads, float grad_threshold
     torch::Tensor new_xyz = torch::bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + _xyz.index_select(0, indices).repeat({N, 1});
     torch::Tensor new_scaling = torch::log(Get_scaling().index_select(0, indices).repeat({N, 1}) / (0.8 * N));
     torch::Tensor new_rotation = _rotation.index_select(0, indices).repeat({N, 1});
+    // TODO I strongly belief that this split is totaly unneccessary. Just makes overhead.
     torch::Tensor new_features_dc = _features_dc.index_select(0, indices).repeat({N, 1, 1});
     torch::Tensor new_features_rest = _features_rest.index_select(0, indices).repeat({N, 1, 1});
     torch::Tensor new_opacity = _opacity.index_select(0, indices).repeat({N, 1});
@@ -788,14 +803,9 @@ void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float e
     densify_and_split(grads, max_grad, extent, min_opacity, max_screen_size);
 }
 
-void GaussianModel::Add_densification_stats(torch::Tensor& viewspace_point_tensor, torch::Tensor& update_filter) {
-    ts::print_debug_info(viewspace_point_tensor, "viewspace_point_tensor");
-    ts::print_debug_info(update_filter, "update_filter");
-    ts::print_debug_info(_xyz_gradient_accum, "_xyz_gradient_accum");
-    ts::print_debug_info(_denom, "_denom");
-
-    // TODO: this seems to be different -> Norm is missing
-    _xyz_gradient_accum.index_put_({update_filter}, _xyz_gradient_accum.index_select(0, update_filter.nonzero().squeeze()) + viewspace_point_tensor.grad().index_select(0, update_filter.nonzero().squeeze()).slice(1, 0, 2).norm(2, -1, true));
+void GaussianModel::Add_densification_stats(torch::Tensor& grad_means2D, torch::Tensor& update_filter) {
+    auto filtered_grad = grad_means2D.index_select(0, update_filter.nonzero().squeeze()).slice(1, 0, 2).norm(2, -1, true);
+    _xyz_gradient_accum.index_put_({update_filter}, _xyz_gradient_accum.index_select(0, update_filter.nonzero().squeeze()) + filtered_grad);
     _denom.index_put_({update_filter}, _denom.index_select(0, update_filter.nonzero().squeeze()) + 1);
 }
 
