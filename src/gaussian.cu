@@ -25,12 +25,6 @@ GaussianModel::~GaussianModel() {
     cudaStreamDestroy(_stream5);
     cudaStreamDestroy(_stream6);
 }
-torch::Tensor GaussianModel::Get_covariance(float scaling_modifier) {
-    auto L = build_scaling_rotation(scaling_modifier * Get_scaling(), _rotation);
-    auto actual_covariance = torch::mm(L, L.transpose(1, 2));
-    auto symm = strip_symmetric(actual_covariance);
-    return symm;
-}
 
 /**
  * @brief Fetches the features of the Gaussian model
@@ -70,11 +64,11 @@ void GaussianModel::Create_from_pcd(PointCloud& pcd, float spatial_lr_scale) {
     _spatial_lr_scale = spatial_lr_scale;
 
     const auto pointType = torch::TensorOptions().dtype(torch::kFloat32);
-    _xyz = torch::from_blob(pcd._points.data(), {static_cast<long>(pcd._points.size()), 3}, pointType).to(torch::kCUDA).set_requires_grad(true);
+    _xyz = torch::from_blob(pcd._points.data(), {static_cast<long>(pcd._points.size()), 3}, pointType).to(torch::kCUDA);
     auto dist2 = torch::clamp_min(distCUDA2(_xyz), 0.0000001);
-    _scaling = torch::log(torch::sqrt(dist2)).unsqueeze(-1).repeat({1, 3}).to(torch::kCUDA, true).set_requires_grad(true);
-    _rotation = torch::zeros({_xyz.size(0), 4}).index_put_({torch::indexing::Slice(), 0}, 1).to(torch::kCUDA, true).set_requires_grad(true);
-    _opacity = inverse_sigmoid(0.5 * torch::ones({_xyz.size(0), 1})).to(torch::kCUDA, true).set_requires_grad(true);
+    _scaling = torch::log(torch::sqrt(dist2)).unsqueeze(-1).repeat({1, 3}).to(torch::kCUDA, true);
+    _rotation = torch::zeros({_xyz.size(0), 4}).index_put_({torch::indexing::Slice(), 0}, 1).to(torch::kCUDA, true);
+    _opacity = inverse_sigmoid(0.5 * torch::ones({_xyz.size(0), 1})).to(torch::kCUDA, true);
     _max_radii2D = torch::zeros({_xyz.size(0)}).to(torch::kCUDA, true);
 
     // colors
@@ -85,8 +79,8 @@ void GaussianModel::Create_from_pcd(PointCloud& pcd, float spatial_lr_scale) {
     auto features = torch::zeros({fused_color.size(0), 3, static_cast<long>(std::pow((_max_sh_degree + 1), 2))}).to(torch::kCUDA);
     features.index_put_({torch::indexing::Slice(), torch::indexing::Slice(torch::indexing::None, 3), 0}, fused_color);
     features.index_put_({torch::indexing::Slice(), torch::indexing::Slice(3, torch::indexing::None), torch::indexing::Slice(1, torch::indexing::None)}, 0.0);
-    _features_dc = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(0, 1)}).transpose(1, 2).contiguous().set_requires_grad(true);
-    _features_rest = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None)}).transpose(1, 2).contiguous().set_requires_grad(true);
+    _features_dc = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(0, 1)}).transpose(1, 2).contiguous();
+    _features_rest = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None)}).transpose(1, 2).contiguous();
 }
 
 /**
@@ -161,7 +155,7 @@ void GaussianModel::Update_Parameter_Pointer() {
 
 void GaussianModel::Reset_opacity() {
     // opacitiy activation
-    _opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f).set_requires_grad(true);
+    _opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f);
     auto updateTensor = torch::zeros_like(_opacity);
     // new optimizer
     auto opacity_params = _optimizer->GetAdamParameter<gs::optim::opacity_param_t>(gs::optim::ParamType::Opacity);
@@ -795,6 +789,12 @@ void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float e
 }
 
 void GaussianModel::Add_densification_stats(torch::Tensor& viewspace_point_tensor, torch::Tensor& update_filter) {
+    ts::print_debug_info(viewspace_point_tensor, "viewspace_point_tensor");
+    ts::print_debug_info(update_filter, "update_filter");
+    ts::print_debug_info(_xyz_gradient_accum, "_xyz_gradient_accum");
+    ts::print_debug_info(_denom, "_denom");
+
+    // TODO: this seems to be different -> Norm is missing
     _xyz_gradient_accum.index_put_({update_filter}, _xyz_gradient_accum.index_select(0, update_filter.nonzero().squeeze()) + viewspace_point_tensor.grad().index_select(0, update_filter.nonzero().squeeze()).slice(1, 0, 2).norm(2, -1, true));
     _denom.index_put_({update_filter}, _denom.index_select(0, update_filter.nonzero().squeeze()) + 1);
 }

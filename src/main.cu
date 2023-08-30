@@ -226,10 +226,8 @@ int main(int argc, char* argv[]) {
             avg_converging_rate = loss_monitor.Update(loss.item<float>());
         }
         loss_add += loss.item<float>();
-        loss.backward();
 
         {
-            torch::NoGradGuard no_grad;
             auto visible_max_radii = gaussians._max_radii2D.masked_select(visibility_filter);
             auto visible_radii = radii.masked_select(visibility_filter);
             auto max_radii = torch::max(visible_max_radii, visible_radii);

@@ -35,7 +35,7 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
     rasterizer.SetRasterizerInput(raster_settings);
 
     auto means3D = gaussianModel.Get_xyz();
-    auto means2D = torch::zeros_like(gaussianModel.Get_xyz()).requires_grad_(true);
+    auto means2D = torch::zeros_like(gaussianModel.Get_xyz());
     auto opacity = gaussianModel.Get_opacity();
 
     auto scales = torch::Tensor();
