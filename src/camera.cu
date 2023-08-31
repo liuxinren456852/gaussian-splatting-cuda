@@ -42,6 +42,7 @@ Camera loadCam(const ModelParameters& params, int id, CameraInfo& cam_info) {
                                                            {cam_info._img_w * cam_info._channels, cam_info._channels, 1}, // stride
                                                            torch::kUInt8);
     original_image_tensor = original_image_tensor.to(torch::kFloat32).permute({2, 0, 1}).clone() / 255.f;
+    original_image_tensor = original_image_tensor.to(torch::kCUDA);
 
     free_image(cam_info._img_data); // we dont longer need the image here.
     cam_info._img_data = nullptr;   // Assure that we dont use the image data anymore.

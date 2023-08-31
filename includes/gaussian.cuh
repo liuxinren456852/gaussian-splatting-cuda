@@ -45,11 +45,12 @@ public:
     void Densify_and_prune(float max_grad, float min_opacity, float extent, float max_screen_size);
     void Save_ply(const std::filesystem::path& file_path, int iteration, bool isLastIteration);
     // this is so unclean. But for now we are concerned to make it work.
-    void Update_Params_and_Grads(const torch::Tensor& grad_means3D,
-                                 const torch::Tensor& grad_sh, // needs to be splitted
-                                 const torch::Tensor& grad_opacities,
-                                 const torch::Tensor& grad_scales,
-                                 const torch::Tensor& grad_rotations);
+    void Update_Params();
+    void Update_Grads(const torch::Tensor& grad_means3D,
+                      const torch::Tensor& grad_sh, // needs to be splitted
+                      const torch::Tensor& grad_opacities,
+                      const torch::Tensor& grad_scales,
+                      const torch::Tensor& grad_rotations);
 
 public:
     // should not be public or it should maybe be pulled out here. Not sure yet
@@ -93,12 +94,12 @@ private:
     float _percent_dense{};
 
     Expon_lr_func _xyz_scheduler_args;
-    cudaStream_t _stream1;
-    cudaStream_t _stream2;
-    cudaStream_t _stream3;
-    cudaStream_t _stream4;
-    cudaStream_t _stream5;
-    cudaStream_t _stream6;
+    //    cudaStream_t _stream1;
+    //    cudaStream_t _stream2;
+    //    cudaStream_t _stream3;
+    //    cudaStream_t _stream4;
+    //    cudaStream_t _stream5;
+    //    cudaStream_t _stream6;
     torch::Tensor _denom;
     torch::Tensor _xyz;
     torch::Tensor _features_dc;
@@ -107,4 +108,5 @@ private:
     torch::Tensor _rotation;
     torch::Tensor _xyz_gradient_accum;
     torch::Tensor _opacity;
+    void Update_Params(const torch::Tensor& grad_means3D, const torch::Tensor& grad_sh, const torch::Tensor& grad_opacities, const torch::Tensor& grad_scales, const torch::Tensor& grad_rotations);
 };

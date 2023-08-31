@@ -1,6 +1,7 @@
 // Copyright (c) 2023 Janusch Patas.
 // All rights reserved. Derived from 3D Gaussian Splatting for Real-Time Radiance Field Rendering software by Inria and MPII.
 #pragma once
+#include <csignal>
 #include <cuda_runtime.h>
 #include <fstream>
 #include <iostream>
@@ -79,6 +80,26 @@ namespace ts {
         }
     }
 
+    template <typename T>
+    inline void print_cuda_pointer_stats(T* ptr) {
+        cudaPointerAttributes attributes;
+        cudaPointerGetAttributes(&attributes, ptr);
+        switch (attributes.type) {
+        case cudaMemoryTypeUnregistered:
+            std::cout << "\nPointer: " << ptr << " is unregistered" << std::endl;
+        case cudaMemoryTypeHost:
+            std::cout << "\nPointer: " << ptr << " is on host" << std::endl;
+        case cudaMemoryTypeDevice:
+            std::cout << "\nPointer: " << ptr << " is on device" << std::endl;
+        case cudaMemoryTypeManaged:
+            std::cout << "\nPointer: " << ptr << " is managed" << std::endl;
+        }
+
+        std::cout << "Device: " << attributes.device << std::endl;
+        std::cout << " DevicePointer: " << attributes.devicePointer << std::endl;
+        std::cout << " HostPointer: " << attributes.hostPointer << std::endl;
+    }
+
 } // namespace ts
 
 //#undef DEBUG_ERRORS
@@ -93,7 +114,8 @@ inline void check(T err, const char* const func, const char* const file,
         std::cerr << "CUDA Runtime Error at: " << file << ":" << line
                   << std::endl;
         std::cerr << cudaGetErrorString(err) << " " << func << std::endl;
-        std::exit(EXIT_FAILURE);
+        std::raise(SIGTRAP);
+        //        std::exit(EXIT_FAILURE);
     }
 #endif // DEBUG_ERRORS
 }
@@ -107,7 +129,8 @@ inline void checkLast(const char* const file, const int line) {
         std::cerr << "CUDA Runtime Error at: " << file << ":" << line
                   << std::endl;
         std::cerr << cudaGetErrorString(err) << std::endl;
-        std::exit(EXIT_FAILURE);
+        std::raise(SIGTRAP);
+        //        std::exit(EXIT_FAILURE);
     }
 #endif // DEBUG_ERRORS
 }

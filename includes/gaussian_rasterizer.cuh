@@ -52,8 +52,6 @@ namespace gs {
                                            torch::Tensor>;
 
     public:
-        GaussianRasterizer() = default;
-
         void SetRasterizerInput(RasterizerInput raster_settings) {
             _raster_input = raster_settings;
         }

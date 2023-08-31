@@ -3,6 +3,7 @@
 
 #include <cuda_runtime.h>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,11 +19,29 @@ namespace gs {
             Features_rest,
         };
 
+        inline std::string Map_param_type_to_string(ParamType param_type) {
+            switch (param_type) {
+            case ParamType::Pos:
+                return "pos";
+            case ParamType::Scaling:
+                return "scaling";
+            case ParamType::Rotation:
+                return "rotation";
+            case ParamType::Opacity:
+                return "opacity";
+            case ParamType::Features_dc:
+                return "features_dc";
+            case ParamType::Features_rest:
+                return "features_rest";
+            default:
+                throw std::runtime_error("Unknown parameter type");
+            }
+        }
+
         class AdamParameterBase {
         public:
             virtual ~AdamParameterBase() = default;
-            virtual void Sync() = 0;
-            virtual void Step() = 0;
+            virtual void Step(cudaStream_t stream) = 0;
             virtual ParamType GetType() = 0;
             virtual void UpdateLearningRate(float lr) = 0;
         };
@@ -33,35 +52,38 @@ namespace gs {
             AdamParameter(ParamType param_type,
                           std::vector<int> shape,
                           float learning_rate,
+                          cudaStream_t stream,
                           float beta1 = 0.9f,
                           float beta2 = 0.999f,
-                          float epsilon = 1e-15);
+                          float epsilon = 1e-8);
             ~AdamParameter() override;
-            void Sync() override;
-            void Step() override;
+            void Step(cudaStream_t stream) override;
             inline ParamType GetType() override { return _param_type; }
             inline void UpdateLearningRate(float lr) override { _lr = lr; }
             T* Get_Exp_Avg() { return _d_avg; }
             T* Get_Exp_Avg_Sq() { return _d_avg_sq; }
-            void Set_Exp_Avg(T* d_avg, std::vector<int> size);
-            void Set_Exp_Avg_Sq(T* d_avg_sq, std::vector<int> size);
-            void Set_Gradient(T* d_param_grad, std::vector<int> size);
-            void Update_Parameter_Pointer(T* d_param) { _d_params = d_param; };
+            void Set_Exp_Avg(T* d_avg, std::vector<int> size, cudaStream_t stream);
+            void Set_Exp_Avg_Sq(T* d_avg_sq, std::vector<int> size, cudaStream_t stream);
+            void Set_Gradient(T* d_param_grad, std::vector<int> gradient_shape, cudaStream_t stream);
+            void Update_Parameter_Pointer(T* d_param, std::vector<int> size) {
+                _d_params = d_param;
+                _param_shape = size;
+            }
 
         private:
-            T* _d_params{};
-            T* _d_params_grad{};
-            T* _d_avg{};
-            T* _d_avg_sq{};
+            T* _d_params = nullptr;
+            T* _d_params_grad = nullptr;
+            T* _d_avg = nullptr;
+            T* _d_avg_sq = nullptr;
 
             ParamType _param_type;
-            std::vector<int> _shape;
+            std::vector<int> _param_shape;
+            std::vector<int> _gradient_shape;
             float _lr;
             float _beta1;
             float _beta2;
             float _epsilon;
             std::string _param_name;
-            cudaStream_t _stream{};
         };
 
         // define types for convenience
@@ -74,8 +96,7 @@ namespace gs {
 
         class Adam {
         public:
-            void Sync();
-            void Step();
+            void Step(cudaStream_t stream);
             void AddParameter(std::shared_ptr<AdamParameterBase> param);
             inline std::shared_ptr<AdamParameterBase> GetParameters(ParamType paramType) { return _params[paramType]; };
 

@@ -41,7 +41,7 @@ std::vector<int> get_random_indices(int max_index) {
     std::vector<int> indices(max_index);
     std::iota(indices.begin(), indices.end(), 0);
     // Shuffle the vector
-    std::shuffle(indices.begin(), indices.end(), std::default_random_engine());
+    //    std::shuffle(indices.begin(), indices.end(), std::default_random_engine());
     return indices;
 }
 
@@ -161,6 +161,7 @@ int main(int argc, char* argv[]) {
     LossMonitor loss_monitor(200);
     float avg_converging_rate = 0.f;
 
+    gaussians.Update_Params();
     for (int iter = 1; iter < optimParams.iterations + 1; ++iter) {
         if (indices.empty()) {
             indices = get_random_indices(camera_count);
@@ -181,6 +182,7 @@ int main(int argc, char* argv[]) {
         auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, background, rasterizer);
 
         // Loss Computations
+        cudaDeviceSynchronize();
         auto [L1l, dL_l1_loss] = gaussian_splatting::l1_loss(image, gt_image);
         auto [ssim_loss, dL_ssim_dimg1] = gaussian_splatting::ssim(image, gt_image, conv_window, window_size, channel);
         auto loss = (1.f - optimParams.lambda_dssim) * L1l + optimParams.lambda_dssim * (1.f - ssim_loss);
@@ -189,7 +191,7 @@ int main(int argc, char* argv[]) {
         const auto dloss_dssim = -optimParams.lambda_dssim;
         const auto dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
         const auto dloss_dimage = dloss_dLl1 * dL_l1_loss + dloss_dssim * dL_ssim_dimg1;
-
+        std::cout << "iter: " << iter << " loss: " << loss.item<float>() << std::endl;
         // backward pass
 
         //        return {grad_means3D,
@@ -200,10 +202,10 @@ int main(int argc, char* argv[]) {
         //                grad_scales,
         //                grad_rotations,
         //                grad_cov3Ds_precomp}; // not needed ?
+        cudaDeviceSynchronize();
         auto [grad_means3D, grad_means2D, grad_sh, grad_color_precomp, grad_opacities, grad_scales, grad_rotations, grad_cov3Ds_precomp] = rasterizer.Backward(dloss_dimage);
         // Work-around for now. This should be done in the backward pass I think.
         // Other option: Parameters should be completely shifted to the optimizer if there are optimized?
-        gaussians.Update_Params_and_Grads(grad_means3D, grad_sh, grad_opacities, grad_scales, grad_rotations);
         // Update status line
         if (iter % 100 == 0) {
             auto cur_time = std::chrono::steady_clock::now();
@@ -237,7 +239,7 @@ int main(int argc, char* argv[]) {
             avg_converging_rate = loss_monitor.Update(loss.item<float>());
         }
         loss_add += loss.item<float>();
-        std::cout << "Iter: " << iter << ", Loss: " << loss.item<float>() << std::endl;
+        //        std::cout << "Iter: " << iter << ", Loss: " << loss.item<float>() << std::endl;
 
         {
             auto visible_max_radii = gaussians._max_radii2D.masked_select(visibility_filter);
@@ -256,12 +258,33 @@ int main(int argc, char* argv[]) {
             }
 
             // Densification
+            if (iter < optimParams.iterations) {
+                gaussians.Update_learning_rate(iter);
+                grad_means3D.index_put_({grad_means3D.isnan()}, 0.0);
+                grad_sh.index_put_({grad_sh.isnan()}, 0.0);
+                grad_opacities.index_put_({grad_opacities.isnan()}, 0.0);
+                grad_scales.index_put_({grad_scales.isnan()}, 0.0);
+                grad_rotations.index_put_({grad_rotations.isnan()}, 0.0);
+                //                grad_means3D = torch::zeros_like(grad_means3D);
+                gaussians.Update_Grads(grad_means3D, grad_sh, grad_opacities, grad_scales, grad_rotations);
+            }
+
+            cudaDeviceSynchronize();
+            gaussians._optimizer->Step(nullptr);
+            cudaDeviceSynchronize();
+
             if (iter < optimParams.densify_until_iter) {
+
+                grad_means2D.index_put_({grad_means2D.isnan()}, 0.0);
                 gaussians.Add_densification_stats(grad_means2D, visibility_filter);
+
+                //  Optimizer step
+
                 if (iter > optimParams.densify_from_iter && iter % optimParams.densification_interval == 0) {
                     // @TODO: Not sure about type
                     float size_threshold = iter > optimParams.opacity_reset_interval ? 20.f : -1.f;
                     gaussians.Densify_and_prune(optimParams.densify_grad_threshold, 0.005f, scene.Get_cameras_extent(), size_threshold);
+                    gaussians.Update_Params();
                 }
 
                 if (iter % optimParams.opacity_reset_interval == 0 || (modelParams.white_background && iter == optimParams.densify_from_iter)) {
@@ -273,13 +296,6 @@ int main(int argc, char* argv[]) {
                 std::cout << "Converged after " << iter << " iterations!" << std::endl;
                 gaussians.Save_ply(modelParams.output_path, iter, true);
                 break;
-            }
-
-            //  Optimizer step
-            if (iter < optimParams.iterations) {
-                // TODO: Zero_grad? Do we need this?
-                gaussians._optimizer->Step();
-                gaussians.Update_learning_rate(iter);
             }
 
             if (optimParams.empty_gpu_cache && iter % 100) {

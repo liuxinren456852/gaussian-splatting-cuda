@@ -559,6 +559,7 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             // Update gradients w.r.t. opacity of the Gaussian
             atomicAdd(&(s_dL_dopacity[idx]), G * dL_dalpha);
         }
+        block.sync();
         if (block.thread_rank() < max_iterations) {
 
             const int coll_id = collected_id[block.thread_rank()];
