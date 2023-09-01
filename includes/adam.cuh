@@ -55,15 +55,17 @@ namespace gs {
                           cudaStream_t stream,
                           float beta1 = 0.9f,
                           float beta2 = 0.999f,
-                          float epsilon = 1e-8);
+                          float epsilon = 1e-15f);
             ~AdamParameter() override;
             void Step(cudaStream_t stream) override;
             inline ParamType GetType() override { return _param_type; }
             inline void UpdateLearningRate(float lr) override { _lr = lr; }
             torch::Tensor Get_Exp_Avg() { return _d_avg; }
             torch::Tensor Get_Exp_Avg_Sq() { return _d_avg_sq; }
+            torch::Tensor Get_Step() { return _d_steps; }
             void Set_Exp_Avg(torch::Tensor d_avg);
             void Set_Exp_Avg_Sq(torch::Tensor d_avg_sq);
+            void Set_Step(torch::Tensor d_step) { _d_steps = d_step; };
             void Set_Gradient(torch::Tensor d_param_grad);
             void Set_Param(torch::Tensor d_param) { _d_params = d_param; }
 
@@ -72,6 +74,7 @@ namespace gs {
             torch::Tensor _d_params_grad;
             torch::Tensor _d_avg;
             torch::Tensor _d_avg_sq;
+            torch::Tensor _d_steps;
 
             ParamType _param_type;
             float _lr;

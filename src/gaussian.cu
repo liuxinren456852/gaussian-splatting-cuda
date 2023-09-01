@@ -120,6 +120,7 @@ void GaussianModel::Reset_opacity() {
     _opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f);
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg(torch::zeros_like(_opacity));
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg_Sq(torch::zeros_like(_opacity));
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Step(torch::zeros({_opacity.size(0), 1}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA)));
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Param(_opacity);
 }
 
@@ -129,6 +130,9 @@ void prune_optimizer(gs::optim::Adam* optimizer, const torch::Tensor& mask, torc
     old_tensor = old_tensor.index_select(0, mask);
     adam_param->Set_Exp_Avg(adam_param->Get_Exp_Avg().index_select(0, mask));
     adam_param->Set_Exp_Avg_Sq(adam_param->Get_Exp_Avg_Sq().index_select(0, mask));
+
+    //    std::cout << "prune_optimizer: " << gs::optim::Map_param_type_to_string(param_type);
+    adam_param->Set_Step(adam_param->Get_Step().index_select(0, mask));
     adam_param->Set_Param(old_tensor);
 }
 
@@ -158,6 +162,9 @@ void cat_tensors_to_optimizer(gs::optim::Adam* optimizer,
     old_tensor = torch::cat({old_tensor, extension_tensor}, 0);
     adam_param->Set_Param(old_tensor);
     adam_param->Set_Exp_Avg(torch::cat({adam_param->Get_Exp_Avg(), torch::zeros_like(extension_tensor)}, 0));
+    //    std::cout << "cat_tensors_to_optimizer: " << gs::optim::Map_param_type_to_string(param_type);
+    const auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
+    adam_param->Set_Step(torch::cat({adam_param->Get_Step(), torch::zeros({extension_tensor.size(0), 1}, options)}, 0));
     adam_param->Set_Exp_Avg_Sq(torch::cat({adam_param->Get_Exp_Avg_Sq(), torch::zeros_like(extension_tensor)}, 0));
 }
 
@@ -264,7 +271,7 @@ std::vector<std::string> GaussianModel::construct_list_of_attributes() {
 }
 
 void GaussianModel::Save_ply(const std::filesystem::path& file_path, int iteration, bool isLastIteration) {
-    std::cout << "Saving at " << std::to_string(iteration) << " iterations\n";
+    //    std::cout << "Saving at " << std::to_string(iteration) << " iterations\n";
     auto folder = file_path / ("point_cloud/iteration_" + std::to_string(iteration));
     std::filesystem::create_directories(folder);
 
