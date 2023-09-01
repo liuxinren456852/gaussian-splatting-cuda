@@ -32,6 +32,7 @@ message(STATUS "Building with ${used_cores} out of ${total_cores} available core
 # --------------------------------------
 
 set(HEADERS
+        includes/adam.cuh
         includes/read_utils.cuh
         includes/gaussian.cuh
         includes/camera.cuh
@@ -47,7 +48,7 @@ set(HEADERS
         includes/parameters.cuh
         includes/loss_utils.cuh
         includes/render_utils.cuh
-        includes/rasterizer.cuh
+        includes/gaussian_rasterizer.cuh
         includes/rasterize_points.cuh
         includes/camera_info.cuh
         includes/debug_utils.cuh
@@ -60,6 +61,7 @@ set(HEADERS
 )
 
 set(SOURCES
+        src/adam.cu
         src/main.cu
         src/read_utils.cu
         src/gaussian.cu
@@ -69,7 +71,7 @@ set(SOURCES
         src/scene.cu
         src/camera_utils.cu
         src/general_utils.cu
-        src/rasterizer.cu
+        src/gaussian_rasterizer.cu
         src/rasterize_points.cu
         cuda_rasterizer/backward.cu
         cuda_rasterizer/forward.cu
@@ -188,7 +190,7 @@ if(BUILD_TESTS)
             src/scene.cu
             src/camera_utils.cu
             src/general_utils.cu
-            src/rasterizer.cu
+            src/gaussian_rasterizer.cu
             src/rasterize_points.cu
             src/read_utils.cu
             tests/render_test.cu

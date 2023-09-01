@@ -7,13 +7,6 @@
 GaussianModel::GaussianModel(int sh_degree) : _max_sh_degree(sh_degree) {
 }
 
-torch::Tensor GaussianModel::Get_covariance(float scaling_modifier) {
-    auto L = build_scaling_rotation(scaling_modifier * Get_scaling(), _rotation);
-    auto actual_covariance = torch::mm(L, L.transpose(1, 2));
-    auto symm = strip_symmetric(actual_covariance);
-    return symm;
-}
-
 /**
  * @brief Fetches the features of the Gaussian model
  *
@@ -52,11 +45,11 @@ void GaussianModel::Create_from_pcd(PointCloud& pcd, float spatial_lr_scale) {
     _spatial_lr_scale = spatial_lr_scale;
 
     const auto pointType = torch::TensorOptions().dtype(torch::kFloat32);
-    _xyz = torch::from_blob(pcd._points.data(), {static_cast<long>(pcd._points.size()), 3}, pointType).to(torch::kCUDA).set_requires_grad(true);
+    _xyz = torch::from_blob(pcd._points.data(), {static_cast<long>(pcd._points.size()), 3}, pointType).to(torch::kCUDA);
     auto dist2 = torch::clamp_min(distCUDA2(_xyz), 0.0000001);
-    _scaling = torch::log(torch::sqrt(dist2)).unsqueeze(-1).repeat({1, 3}).to(torch::kCUDA, true).set_requires_grad(true);
-    _rotation = torch::zeros({_xyz.size(0), 4}).index_put_({torch::indexing::Slice(), 0}, 1).to(torch::kCUDA, true).set_requires_grad(true);
-    _opacity = inverse_sigmoid(0.5 * torch::ones({_xyz.size(0), 1})).to(torch::kCUDA, true).set_requires_grad(true);
+    _scaling = torch::log(torch::sqrt(dist2)).unsqueeze(-1).repeat({1, 3}).to(torch::kCUDA, true);
+    _rotation = torch::zeros({_xyz.size(0), 4}).index_put_({torch::indexing::Slice(), 0}, 1).to(torch::kCUDA, true);
+    _opacity = inverse_sigmoid(0.5 * torch::ones({_xyz.size(0), 1})).to(torch::kCUDA, true);
     _max_radii2D = torch::zeros({_xyz.size(0)}).to(torch::kCUDA, true);
 
     // colors
@@ -67,8 +60,8 @@ void GaussianModel::Create_from_pcd(PointCloud& pcd, float spatial_lr_scale) {
     auto features = torch::zeros({fused_color.size(0), 3, static_cast<long>(std::pow((_max_sh_degree + 1), 2))}).to(torch::kCUDA);
     features.index_put_({torch::indexing::Slice(), torch::indexing::Slice(torch::indexing::None, 3), 0}, fused_color);
     features.index_put_({torch::indexing::Slice(), torch::indexing::Slice(3, torch::indexing::None), torch::indexing::Slice(1, torch::indexing::None)}, 0.0);
-    _features_dc = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(0, 1)}).transpose(1, 2).contiguous().set_requires_grad(true);
-    _features_rest = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None)}).transpose(1, 2).contiguous().set_requires_grad(true);
+    _features_dc = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(0, 1)}).transpose(1, 2).contiguous();
+    _features_rest = features.index({torch::indexing::Slice(), torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None)}).transpose(1, 2).contiguous();
 }
 
 /**
@@ -88,61 +81,55 @@ void GaussianModel::Training_setup(const OptimizationParameters& params) {
                                               params.position_lr_delay_mult,
                                               params.position_lr_max_steps);
 
-    std::vector<torch::optim::OptimizerParamGroup> optimizer_params_groups;
-    optimizer_params_groups.reserve(6);
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_xyz}, std::make_unique<torch::optim::AdamOptions>(params.position_lr_init * this->_spatial_lr_scale)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_features_dc}, std::make_unique<torch::optim::AdamOptions>(params.feature_lr)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_features_rest}, std::make_unique<torch::optim::AdamOptions>(params.feature_lr / 20.)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_scaling}, std::make_unique<torch::optim::AdamOptions>(params.scaling_lr * this->_spatial_lr_scale)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_rotation}, std::make_unique<torch::optim::AdamOptions>(params.rotation_lr)));
-    optimizer_params_groups.push_back(torch::optim::OptimizerParamGroup({_opacity}, std::make_unique<torch::optim::AdamOptions>(params.opacity_lr)));
-
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[0].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[1].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[2].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[3].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[4].options()).eps(1e-15);
-    static_cast<torch::optim::AdamOptions&>(optimizer_params_groups[5].options()).eps(1e-15);
-
-    _optimizer = std::make_unique<torch::optim::Adam>(optimizer_params_groups, torch::optim::AdamOptions(0.f).eps(1e-15));
+    _optimizer = std::make_unique<gs::optim::Adam>();
+    _optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter>(gs::optim::ParamType::Pos,
+                                                                        _xyz,
+                                                                        params.position_lr_init * this->_spatial_lr_scale,
+                                                                        nullptr));
+    _optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter>(gs::optim::ParamType::Features_dc,
+                                                                        _features_dc,
+                                                                        params.feature_lr,
+                                                                        nullptr));
+    _optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter>(gs::optim::ParamType::Features_rest,
+                                                                        _features_rest,
+                                                                        params.feature_lr / 20.f,
+                                                                        nullptr));
+    _optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter>(gs::optim::ParamType::Scaling,
+                                                                        _scaling,
+                                                                        params.scaling_lr * this->_spatial_lr_scale,
+                                                                        nullptr));
+    _optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter>(gs::optim::ParamType::Rotation,
+                                                                        _rotation,
+                                                                        params.rotation_lr,
+                                                                        nullptr));
+    _optimizer->AddParameter(std::make_shared<gs::optim::AdamParameter>(gs::optim::ParamType::Opacity,
+                                                                        _opacity,
+                                                                        params.opacity_lr,
+                                                                        nullptr));
 }
 
 void GaussianModel::Update_learning_rate(float iteration) {
     // This is hacky because you cant change in libtorch individual parameter learning rate
     // xyz is added first, since _optimizer->param_groups() return a vector, we assume that xyz stays first
     auto lr = _xyz_scheduler_args(iteration);
-    static_cast<torch::optim::AdamOptions&>(_optimizer->param_groups()[0].options()).set_lr(lr);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Pos)->UpdateLearningRate(lr);
 }
 
 void GaussianModel::Reset_opacity() {
     // opacitiy activation
-    auto new_opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f);
-
-    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
-        *_optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl())]));
-
-    _optimizer->state().erase(c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl()));
-
-    adamParamStates->exp_avg(torch::zeros_like(new_opacity));
-    adamParamStates->exp_avg_sq(torch::zeros_like(new_opacity));
-    // replace tensor
-    _optimizer->param_groups()[5].params()[0] = new_opacity.set_requires_grad(true);
-    _opacity = _optimizer->param_groups()[5].params()[0];
-
-    _optimizer->state()[c10::guts::to_string(_optimizer->param_groups()[5].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
+    _opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg(torch::zeros_like(_opacity));
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg_Sq(torch::zeros_like(_opacity));
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Param(_opacity);
 }
 
-void prune_optimizer(torch::optim::Adam* optimizer, const torch::Tensor& mask, torch::Tensor& old_tensor, int param_position) {
-    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
-        *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
-    optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
+void prune_optimizer(gs::optim::Adam* optimizer, const torch::Tensor& mask, torch::Tensor& old_tensor, gs::optim::ParamType param_type) {
 
-    adamParamStates->exp_avg(adamParamStates->exp_avg().index_select(0, mask));
-    adamParamStates->exp_avg_sq(adamParamStates->exp_avg_sq().index_select(0, mask));
-
-    optimizer->param_groups()[param_position].params()[0] = old_tensor.index_select(0, mask).set_requires_grad(true);
-    old_tensor = optimizer->param_groups()[param_position].params()[0]; // update old tensor
-    optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
+    auto adam_param = optimizer->GetAdamParameter(param_type);
+    old_tensor = old_tensor.index_select(0, mask);
+    adam_param->Set_Exp_Avg(adam_param->Get_Exp_Avg().index_select(0, mask));
+    adam_param->Set_Exp_Avg_Sq(adam_param->Get_Exp_Avg_Sq().index_select(0, mask));
+    adam_param->Set_Param(old_tensor);
 }
 
 void GaussianModel::prune_points(torch::Tensor mask) {
@@ -150,33 +137,28 @@ void GaussianModel::prune_points(torch::Tensor mask) {
     auto valid_point_mask = ~mask;
     int true_count = valid_point_mask.sum().item<int>();
     auto indices = torch::nonzero(valid_point_mask == true).index({torch::indexing::Slice(torch::indexing::None, torch::indexing::None), torch::indexing::Slice(torch::indexing::None, 1)}).squeeze(-1);
-    prune_optimizer(_optimizer.get(), indices, _xyz, 0);
-    prune_optimizer(_optimizer.get(), indices, _features_dc, 1);
-    prune_optimizer(_optimizer.get(), indices, _features_rest, 2);
-    prune_optimizer(_optimizer.get(), indices, _scaling, 3);
-    prune_optimizer(_optimizer.get(), indices, _rotation, 4);
-    prune_optimizer(_optimizer.get(), indices, _opacity, 5);
+    prune_optimizer(_optimizer.get(), indices, _xyz, gs::optim::ParamType::Pos);
+    prune_optimizer(_optimizer.get(), indices, _features_dc, gs::optim::ParamType::Features_dc);
+    prune_optimizer(_optimizer.get(), indices, _features_rest, gs::optim::ParamType::Features_rest);
+    prune_optimizer(_optimizer.get(), indices, _scaling, gs::optim::ParamType::Scaling);
+    prune_optimizer(_optimizer.get(), indices, _rotation, gs::optim::ParamType::Rotation);
+    prune_optimizer(_optimizer.get(), indices, _opacity, gs::optim::ParamType::Opacity);
 
     _xyz_gradient_accum = _xyz_gradient_accum.index_select(0, indices);
     _denom = _denom.index_select(0, indices);
     _max_radii2D = _max_radii2D.index_select(0, indices);
 }
 
-void cat_tensors_to_optimizer(torch::optim::Adam* optimizer,
+void cat_tensors_to_optimizer(gs::optim::Adam* optimizer,
                               torch::Tensor& extension_tensor,
                               torch::Tensor& old_tensor,
-                              int param_position) {
-    auto adamParamStates = std::make_unique<torch::optim::AdamParamState>(static_cast<torch::optim::AdamParamState&>(
-        *optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())]));
-    optimizer->state().erase(c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl()));
+                              gs::optim::ParamType param_type) {
 
-    adamParamStates->exp_avg(torch::cat({adamParamStates->exp_avg(), torch::zeros_like(extension_tensor)}, 0));
-    adamParamStates->exp_avg_sq(torch::cat({adamParamStates->exp_avg_sq(), torch::zeros_like(extension_tensor)}, 0));
-
-    optimizer->param_groups()[param_position].params()[0] = torch::cat({old_tensor, extension_tensor}, 0).set_requires_grad(true);
-    old_tensor = optimizer->param_groups()[param_position].params()[0];
-
-    optimizer->state()[c10::guts::to_string(optimizer->param_groups()[param_position].params()[0].unsafeGetTensorImpl())] = std::move(adamParamStates);
+    auto adam_param = optimizer->GetAdamParameter(param_type);
+    old_tensor = torch::cat({old_tensor, extension_tensor}, 0);
+    adam_param->Set_Param(old_tensor);
+    adam_param->Set_Exp_Avg(torch::cat({adam_param->Get_Exp_Avg(), torch::zeros_like(extension_tensor)}, 0));
+    adam_param->Set_Exp_Avg_Sq(torch::cat({adam_param->Get_Exp_Avg_Sq(), torch::zeros_like(extension_tensor)}, 0));
 }
 
 void GaussianModel::densification_postfix(torch::Tensor& new_xyz,
@@ -185,12 +167,12 @@ void GaussianModel::densification_postfix(torch::Tensor& new_xyz,
                                           torch::Tensor& new_scaling,
                                           torch::Tensor& new_rotation,
                                           torch::Tensor& new_opacity) {
-    cat_tensors_to_optimizer(_optimizer.get(), new_xyz, _xyz, 0);
-    cat_tensors_to_optimizer(_optimizer.get(), new_features_dc, _features_dc, 1);
-    cat_tensors_to_optimizer(_optimizer.get(), new_features_rest, _features_rest, 2);
-    cat_tensors_to_optimizer(_optimizer.get(), new_scaling, _scaling, 3);
-    cat_tensors_to_optimizer(_optimizer.get(), new_rotation, _rotation, 4);
-    cat_tensors_to_optimizer(_optimizer.get(), new_opacity, _opacity, 5);
+    cat_tensors_to_optimizer(_optimizer.get(), new_xyz, _xyz, gs::optim::ParamType::Pos);
+    cat_tensors_to_optimizer(_optimizer.get(), new_features_dc, _features_dc, gs::optim::ParamType::Features_dc);
+    cat_tensors_to_optimizer(_optimizer.get(), new_features_rest, _features_rest, gs::optim::ParamType::Features_rest);
+    cat_tensors_to_optimizer(_optimizer.get(), new_scaling, _scaling, gs::optim::ParamType::Scaling);
+    cat_tensors_to_optimizer(_optimizer.get(), new_rotation, _rotation, gs::optim::ParamType::Rotation);
+    cat_tensors_to_optimizer(_optimizer.get(), new_opacity, _opacity, gs::optim::ParamType::Opacity);
 
     _xyz_gradient_accum = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
     _denom = torch::zeros({_xyz.size(0), 1}).to(torch::kCUDA);
@@ -255,8 +237,9 @@ void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float e
     densify_and_split(grads, max_grad, extent, min_opacity, max_screen_size);
 }
 
-void GaussianModel::Add_densification_stats(torch::Tensor& viewspace_point_tensor, torch::Tensor& update_filter) {
-    _xyz_gradient_accum.index_put_({update_filter}, _xyz_gradient_accum.index_select(0, update_filter.nonzero().squeeze()) + viewspace_point_tensor.grad().index_select(0, update_filter.nonzero().squeeze()).slice(1, 0, 2).norm(2, -1, true));
+void GaussianModel::Add_densification_stats(torch::Tensor& grad_means2D, torch::Tensor& update_filter) {
+    auto filtered_grad = grad_means2D.index_select(0, update_filter.nonzero().squeeze()).slice(1, 0, 2).norm(2, -1, true);
+    _xyz_gradient_accum.index_put_({update_filter}, _xyz_gradient_accum.index_select(0, update_filter.nonzero().squeeze()) + filtered_grad);
     _denom.index_put_({update_filter}, _denom.index_select(0, update_filter.nonzero().squeeze()) + 1);
 }
 
@@ -310,4 +293,32 @@ void GaussianModel::Save_ply(const std::filesystem::path& file_path, int iterati
     } else {
         t.detach();
     }
+}
+void GaussianModel::Update_Grads(const torch::Tensor& grad_means3D,
+                                 const torch::Tensor& grad_sh,
+                                 const torch::Tensor& grad_opacities,
+                                 const torch::Tensor& grad_scales,
+                                 const torch::Tensor& grad_rotations) {
+    auto grad_features_dc = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1), torch::indexing::Slice()}).contiguous();
+    auto grad_features_rest = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None), torch::indexing::Slice()}).contiguous();
+
+    if (grad_means3D.sizes() != _xyz.sizes() || grad_means3D.size(1) != 3) {
+        throw std::runtime_error("grad_means3D and xyz have different sizes");
+    }
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Pos)->Set_Gradient(grad_means3D);
+
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Features_dc)->Set_Gradient(grad_features_dc);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Features_rest)->Set_Gradient(grad_features_rest);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Scaling)->Set_Gradient(grad_scales);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Rotation)->Set_Gradient(grad_rotations);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Gradient(grad_opacities);
+}
+
+void GaussianModel::Set_Params() {
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Pos)->Set_Param(_xyz);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Features_dc)->Set_Param(_features_dc);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Features_rest)->Set_Param(_features_rest);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Scaling)->Set_Param(_scaling);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Rotation)->Set_Param(_rotation);
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Param(_opacity);
 }

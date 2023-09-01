@@ -1,11 +1,10 @@
 // Copyright (c) 2023 Janusch Patas.
 // All rights reserved. Derived from 3D Gaussian Splatting for Real-Time Radiance Field Rendering software by Inria and MPII.
 #pragma once
-
 #include "camera.cuh"
 #include "gaussian.cuh"
+#include "gaussian_rasterizer.cuh"
 #include "parameters.cuh"
-#include "rasterizer.cuh"
 #include "sh_utils.cuh"
 #include <cmath>
 #include <torch/torch.h>
@@ -13,13 +12,13 @@
 inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> render(Camera& viewpoint_camera,
                                                                                      GaussianModel& gaussianModel,
                                                                                      torch::Tensor& bg_color,
-                                                                                     float scaling_modifier = 1.0,
-                                                                                     torch::Tensor override_color = torch::empty({})) {
+                                                                                     gs::GaussianRasterizer& rasterizer,
+                                                                                     float scaling_modifier = 1.0) {
     // Ensure background tensor (bg_color) is on GPU!
     bg_color = bg_color.to(torch::kCUDA);
 
     // Set up rasterization configuration
-    GaussianRasterizationSettings raster_settings = {
+    gs::GaussianRasterizer::RasterizerInput raster_settings = {
         .image_height = static_cast<int>(viewpoint_camera.Get_image_height()),
         .image_width = static_cast<int>(viewpoint_camera.Get_image_width()),
         .tanfovx = std::tan(viewpoint_camera.Get_FoVx() * 0.5f),
@@ -32,28 +31,22 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
         .camera_center = viewpoint_camera.Get_camera_center(),
         .prefiltered = false};
 
-    GaussianRasterizer rasterizer = GaussianRasterizer(raster_settings);
+    rasterizer.SetRasterizerInput(raster_settings);
 
     auto means3D = gaussianModel.Get_xyz();
-    auto means2D = torch::zeros_like(gaussianModel.Get_xyz()).requires_grad_(true);
+    auto means2D = torch::zeros_like(gaussianModel.Get_xyz());
     auto opacity = gaussianModel.Get_opacity();
 
-    auto scales = torch::Tensor();
-    auto rotations = torch::Tensor();
+    auto scales = gaussianModel.Get_scaling();
+    auto rotations = gaussianModel.Get_rotation();
     auto cov3D_precomp = torch::Tensor();
 
-    scales = gaussianModel.Get_scaling();
-    rotations = gaussianModel.Get_rotation();
-
-    auto shs = torch::Tensor();
-    torch::Tensor colors_precomp = torch::Tensor();
+    auto colors_precomp = torch::Tensor();
     // This is nonsense. Background color not used? See orginal file colors_precomp=None line 70
-    shs = gaussianModel.Get_features();
-
-    torch::cuda::synchronize();
+    auto shs = gaussianModel.Get_features();
 
     // Rasterize visible Gaussians to image, obtain their radii (on screen).
-    auto [rendererd_image, radii] = rasterizer.forward(
+    auto [rendererd_image, radii] = rasterizer.Forward(
         means3D,
         means2D,
         opacity,
@@ -62,6 +55,8 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
         scales,
         rotations,
         cov3D_precomp);
+
+    // rasterizer.backward();
 
     // Apply visibility filter to remove occluded Gaussians.
     // TODO: I think there is no real use for means2D, isn't it?

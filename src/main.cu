@@ -150,7 +150,7 @@ int main(int argc, char* argv[]) {
 
     const int window_size = 11;
     const int channel = 3;
-    const auto conv_window = gaussian_splatting::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
+    const auto conv_window = gs::loss::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
     const int camera_count = scene.Get_camera_count();
 
     std::vector<int> indices;
@@ -161,6 +161,8 @@ int main(int argc, char* argv[]) {
     LossMonitor loss_monitor(200);
     float avg_converging_rate = 0.f;
 
+    // We have initially give the parameters to the optimizer
+    gaussians.Set_Params();
     for (int iter = 1; iter < optimParams.iterations + 1; ++iter) {
         if (indices.empty()) {
             indices = get_random_indices(camera_count);
@@ -172,14 +174,21 @@ int main(int argc, char* argv[]) {
         if (iter % 1000 == 0) {
             gaussians.One_up_sh_degree();
         }
+        gs::GaussianRasterizer rasterizer;
+
         // Render
-        auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, background);
-
+        auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, background, rasterizer);
         // Loss Computations
-        auto l1l = gaussian_splatting::l1_loss(image, gt_image);
-        auto ssim_loss = gaussian_splatting::ssim(image, gt_image, conv_window, window_size, channel);
-        auto loss = (1.f - optimParams.lambda_dssim) * l1l + optimParams.lambda_dssim * (1.f - ssim_loss);
+        auto [L1l, dL_l1_loss] = gs::loss::l1_loss(image, gt_image);
+        auto [ssim_loss, dL_ssim_dimg1] = gs::loss::ssim(image, gt_image, conv_window, window_size, channel);
+        auto loss = (1.f - optimParams.lambda_dssim) * L1l + optimParams.lambda_dssim * (1.f - ssim_loss);
 
+        // Calculate the loss derivative with respect to the rendering output from the forward pass
+        const auto dloss_dssim = -optimParams.lambda_dssim;
+        const auto dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
+        const auto dloss_dimage = dloss_dLl1 * dL_l1_loss + dloss_dssim * dL_ssim_dimg1;
+        //        std::cout << "iter: " << iter << " loss: " << loss.item<float>() << std::endl;
+        auto [grad_means3D, grad_means2D, grad_sh, grad_color_precomp, grad_opacities, grad_scales, grad_rotations, grad_cov3Ds_precomp] = rasterizer.Backward(dloss_dimage);
         // Update status line
         if (iter % 100 == 0) {
             auto cur_time = std::chrono::steady_clock::now();
@@ -213,14 +222,19 @@ int main(int argc, char* argv[]) {
             avg_converging_rate = loss_monitor.Update(loss.item<float>());
         }
         loss_add += loss.item<float>();
-        loss.backward();
 
         {
-            torch::NoGradGuard no_grad;
             auto visible_max_radii = gaussians._max_radii2D.masked_select(visibility_filter);
             auto visible_radii = radii.masked_select(visibility_filter);
             auto max_radii = torch::max(visible_max_radii, visible_radii);
             gaussians._max_radii2D.masked_scatter_(visibility_filter, max_radii);
+            gaussians.Update_Grads(grad_means3D, grad_sh, grad_opacities, grad_scales, grad_rotations);
+
+            //  Optimizer step
+            if (iter < optimParams.iterations) {
+                gaussians._optimizer->Step(nullptr);
+                gaussians.Update_learning_rate(iter);
+            }
 
             if (iter == optimParams.iterations) {
                 std::cout << std::endl;
@@ -234,7 +248,7 @@ int main(int argc, char* argv[]) {
 
             // Densification
             if (iter < optimParams.densify_until_iter) {
-                gaussians.Add_densification_stats(viewspace_point_tensor, visibility_filter);
+                gaussians.Add_densification_stats(grad_means2D, visibility_filter);
                 if (iter > optimParams.densify_from_iter && iter % optimParams.densification_interval == 0) {
                     // @TODO: Not sure about type
                     float size_threshold = iter > optimParams.opacity_reset_interval ? 20.f : -1.f;
@@ -250,14 +264,6 @@ int main(int argc, char* argv[]) {
                 std::cout << "Converged after " << iter << " iterations!" << std::endl;
                 gaussians.Save_ply(modelParams.output_path, iter, true);
                 break;
-            }
-
-            //  Optimizer step
-            if (iter < optimParams.iterations) {
-                gaussians._optimizer->step();
-                gaussians._optimizer->zero_grad(true);
-                // @TODO: Not sure about type
-                gaussians.Update_learning_rate(iter);
             }
 
             if (optimParams.empty_gpu_cache && iter % 100) {
