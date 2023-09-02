@@ -189,6 +189,13 @@ int main(int argc, char* argv[]) {
         const auto dloss_dimage = dloss_dLl1 * dL_l1_loss + dloss_dssim * dL_ssim_dimg1;
         //        std::cout << std::setprecision(6) << "iter: " << iter << " loss: " << loss.item<float>() << std::endl;
         auto [grad_means3D, grad_means2D, grad_sh, grad_color_precomp, grad_opacities, grad_scales, grad_rotations, grad_cov3Ds_precomp] = rasterizer.Backward(dloss_dimage);
+        grad_means3D.index_put_({grad_means3D.isnan()}, 0.f);
+        grad_means2D.index_put_({grad_means2D.isnan()}, 0.f);
+        grad_sh.index_put_({grad_sh.isnan()}, 0.f);
+        grad_opacities.index_put_({grad_opacities.isnan()}, 0.f);
+        grad_scales.index_put_({grad_scales.isnan()}, 0.f);
+        grad_rotations.index_put_({grad_rotations.isnan()}, 0.f);
+
         // Update status line
         if (iter % 100 == 0) {
             auto cur_time = std::chrono::steady_clock::now();

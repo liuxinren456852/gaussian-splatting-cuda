@@ -121,7 +121,7 @@ void GaussianModel::Reset_opacity() {
     _opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f);
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg(torch::zeros_like(_opacity));
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg_Sq(torch::zeros_like(_opacity));
-    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Step(torch::zeros({_opacity.size(0), 1}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA)));
+    //    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Step(torch::zeros_like(_opacity, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA)));
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Param(_opacity);
 }
 
@@ -133,14 +133,13 @@ void prune_optimizer(gs::optim::Adam* optimizer, const torch::Tensor& mask, torc
     adam_param->Set_Exp_Avg_Sq(adam_param->Get_Exp_Avg_Sq().index_select(0, mask));
 
     //    std::cout << "prune_optimizer: " << gs::optim::Map_param_type_to_string(param_type);
-    adam_param->Set_Step(adam_param->Get_Step().index_select(0, mask));
+    //    adam_param->Set_Step(adam_param->Get_Step().index_select(0, mask));
     adam_param->Set_Param(old_tensor);
 }
 
 void GaussianModel::prune_points(torch::Tensor mask) {
     // reverse to keep points
     auto valid_point_mask = ~mask;
-    int true_count = valid_point_mask.sum().item<int>();
     auto indices = torch::nonzero(valid_point_mask == true).index({torch::indexing::Slice(torch::indexing::None, torch::indexing::None), torch::indexing::Slice(torch::indexing::None, 1)}).squeeze(-1);
     prune_optimizer(_optimizer.get(), indices, _xyz, gs::optim::ParamType::Pos);
     prune_optimizer(_optimizer.get(), indices, _features_dc, gs::optim::ParamType::Features_dc);
@@ -165,7 +164,7 @@ void cat_tensors_to_optimizer(gs::optim::Adam* optimizer,
     adam_param->Set_Exp_Avg(torch::cat({adam_param->Get_Exp_Avg(), torch::zeros_like(extension_tensor)}, 0));
     //    std::cout << "cat_tensors_to_optimizer: " << gs::optim::Map_param_type_to_string(param_type);
     const auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
-    adam_param->Set_Step(torch::cat({adam_param->Get_Step(), torch::zeros({extension_tensor.size(0), 1}, options)}, 0));
+    //    adam_param->Set_Step(torch::cat({adam_param->Get_Step(), torch::zeros_like(extension_tensor, options)}, 0));
     adam_param->Set_Exp_Avg_Sq(torch::cat({adam_param->Get_Exp_Avg_Sq(), torch::zeros_like(extension_tensor)}, 0));
 }
 
@@ -242,7 +241,7 @@ void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float e
     grads.index_put_({grads.isnan()}, 0.0);
 
     _xyz = _optimizer->GetAdamParameter(gs::optim::ParamType::Pos)->Get_Param();
-    _features_dc = _optimizer->GetAdamParameter(gs::optim::ParamType::Features_dc)->Get_Param();
+
     _features_rest = _optimizer->GetAdamParameter(gs::optim::ParamType::Features_rest)->Get_Param();
     _scaling = _optimizer->GetAdamParameter(gs::optim::ParamType::Scaling)->Get_Param();
     _rotation = _optimizer->GetAdamParameter(gs::optim::ParamType::Rotation)->Get_Param();

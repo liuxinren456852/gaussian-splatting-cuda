@@ -185,6 +185,7 @@ namespace gs {
         raster_input.scales = raster_input.scales.to(device);
         raster_input.rotations = raster_input.rotations.to(device);
         raster_input.cov3Ds_precomp = raster_input.cov3Ds_precomp.to(device);
+        raster_input.camera_center = raster_input.camera_center.contiguous();
 
         auto [num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer] = gs::rasterizer::RasterizeGaussiansCUDA(
             raster_input.bg,
