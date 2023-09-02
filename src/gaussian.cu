@@ -117,6 +117,7 @@ void GaussianModel::Update_learning_rate(float iteration) {
 
 void GaussianModel::Reset_opacity() {
     // opacitiy activation
+    _opacity = _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Get_Param();
     _opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f);
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg(torch::zeros_like(_opacity));
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg_Sq(torch::zeros_like(_opacity));
@@ -239,6 +240,13 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
 void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float extent, float max_screen_size) {
     torch::Tensor grads = _xyz_gradient_accum / _denom;
     grads.index_put_({grads.isnan()}, 0.0);
+
+    _xyz = _optimizer->GetAdamParameter(gs::optim::ParamType::Pos)->Get_Param();
+    _features_dc = _optimizer->GetAdamParameter(gs::optim::ParamType::Features_dc)->Get_Param();
+    _features_rest = _optimizer->GetAdamParameter(gs::optim::ParamType::Features_rest)->Get_Param();
+    _scaling = _optimizer->GetAdamParameter(gs::optim::ParamType::Scaling)->Get_Param();
+    _rotation = _optimizer->GetAdamParameter(gs::optim::ParamType::Rotation)->Get_Param();
+    _opacity = _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Get_Param();
 
     densify_and_clone(grads, max_grad, extent);
     densify_and_split(grads, max_grad, extent, min_opacity, max_screen_size);

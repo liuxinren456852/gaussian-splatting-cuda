@@ -68,6 +68,7 @@ namespace gs {
             void Set_Step(torch::Tensor d_step) { _d_steps = d_step; };
             void Set_Gradient(torch::Tensor d_param_grad);
             void Set_Param(torch::Tensor d_param) { _d_params = d_param; }
+            torch::Tensor Get_Param() { return _d_params; }
 
         private:
             torch::Tensor _d_params;
