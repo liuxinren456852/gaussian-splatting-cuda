@@ -3,22 +3,23 @@
 #pragma once
 #include "camera.cuh"
 #include "gaussian.cuh"
-#include "gaussian_rasterizer.cuh"
 #include "parameters.cuh"
+#include "rasterizer.cuh"
 #include "sh_utils.cuh"
 #include <cmath>
 #include <torch/torch.h>
 
-inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> render(Camera& viewpoint_camera,
+inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> render(gs::SaveForBackward& saveForBackwars,
+                                                                                     Camera& viewpoint_camera,
                                                                                      GaussianModel& gaussianModel,
                                                                                      torch::Tensor& bg_color,
-                                                                                     gs::GaussianRasterizer& rasterizer,
                                                                                      float scaling_modifier = 1.0) {
     // Ensure background tensor (bg_color) is on GPU!
     bg_color = bg_color.to(torch::kCUDA);
 
+    gs::GaussianRasterizer rasterizer;
     // Set up rasterization configuration
-    gs::GaussianRasterizer::RasterizerInput raster_settings = {
+    gs::RasterizerInput raster_settings = {
         .image_height = static_cast<int>(viewpoint_camera.Get_image_height()),
         .image_width = static_cast<int>(viewpoint_camera.Get_image_width()),
         .tanfovx = std::tan(viewpoint_camera.Get_FoVx() * 0.5f),
@@ -46,7 +47,9 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
     auto shs = gaussianModel.Get_features();
 
     // Rasterize visible Gaussians to image, obtain their radii (on screen).
-    auto [rendererd_image, radii] = rasterizer.Forward(
+
+    auto [rendererd_image, radii] = rasterizer.Forward_RG(
+        saveForBackwars,
         means3D,
         means2D,
         opacity,
@@ -55,8 +58,6 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
         scales,
         rotations,
         cov3D_precomp);
-
-    // rasterizer.backward();
 
     // Apply visibility filter to remove occluded Gaussians.
     // TODO: I think there is no real use for means2D, isn't it?

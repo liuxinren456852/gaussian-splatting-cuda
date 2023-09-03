@@ -3,6 +3,7 @@
 #include "loss_monitor.cuh"
 #include "loss_utils.cuh"
 #include "parameters.cuh"
+#include "rasterizer.cuh"
 #include "render_utils.cuh"
 #include "scene.cuh"
 #include <args.hxx>
@@ -174,10 +175,10 @@ int main(int argc, char* argv[]) {
         if (iter % 1000 == 0) {
             gaussians.One_up_sh_degree();
         }
-        gs::GaussianRasterizer rasterizer;
 
         // Render
-        auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, background, rasterizer);
+        gs::SaveForBackward saveForBackwars;
+        auto [image, viewspace_point_tensor, visibility_filter, radii] = render(saveForBackwars, cam, gaussians, background);
         // Loss Computations
         auto [L1l, dL_l1_loss] = gs::loss::l1_loss(image, gt_image);
         auto [ssim_loss, dL_ssim_dimg1] = gs::loss::ssim(image, gt_image, conv_window, window_size, channel);
@@ -188,7 +189,7 @@ int main(int argc, char* argv[]) {
         const auto dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
         const auto dloss_dimage = dloss_dLl1 * dL_l1_loss + dloss_dssim * dL_ssim_dimg1;
         //        std::cout << std::setprecision(6) << "iter: " << iter << " loss: " << loss.item<float>() << std::endl;
-        auto [grad_means3D, grad_means2D, grad_sh, grad_color_precomp, grad_opacities, grad_scales, grad_rotations, grad_cov3Ds_precomp] = rasterizer.Backward(dloss_dimage);
+        auto [grad_means3D, grad_means2D, grad_sh, grad_color_precomp, grad_opacities, grad_scales, grad_rotations, grad_cov3Ds_precomp] = gs::_RasterizeGaussians::Backward(saveForBackwars, dloss_dimage);
         grad_means3D.index_put_({grad_means3D.isnan()}, 0.f);
         grad_means2D.index_put_({grad_means2D.isnan()}, 0.f);
         grad_sh.index_put_({grad_sh.isnan()}, 0.f);

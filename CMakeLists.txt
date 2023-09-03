@@ -45,10 +45,10 @@ set(HEADERS
         includes/camera_utils.cuh
         includes/general_utils.cuh
         includes/sh_utils.cuh
+        includes/rasterizer.cuh
         includes/parameters.cuh
         includes/loss_utils.cuh
         includes/render_utils.cuh
-        includes/gaussian_rasterizer.cuh
         includes/rasterize_points.cuh
         includes/camera_info.cuh
         includes/debug_utils.cuh
@@ -71,7 +71,7 @@ set(SOURCES
         src/scene.cu
         src/camera_utils.cu
         src/general_utils.cu
-        src/gaussian_rasterizer.cu
+        src/rasterizer.cu
         src/rasterize_points.cu
         cuda_rasterizer/backward.cu
         cuda_rasterizer/forward.cu

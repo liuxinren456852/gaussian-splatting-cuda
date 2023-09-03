@@ -47,10 +47,10 @@ void GaussianModel::Create_from_pcd(PointCloud& pcd, float spatial_lr_scale) {
     const auto pointType = torch::TensorOptions().dtype(torch::kFloat32);
     _xyz = torch::from_blob(pcd._points.data(), {static_cast<long>(pcd._points.size()), 3}, pointType).to(torch::kCUDA);
     auto dist2 = torch::clamp_min(distCUDA2(_xyz), 0.0000001);
-    _scaling = torch::log(torch::sqrt(dist2)).unsqueeze(-1).repeat({1, 3}).to(torch::kCUDA, true);
-    _rotation = torch::zeros({_xyz.size(0), 4}).index_put_({torch::indexing::Slice(), 0}, 1).to(torch::kCUDA, true);
-    _opacity = inverse_sigmoid(0.5 * torch::ones({_xyz.size(0), 1})).to(torch::kCUDA, true);
-    _max_radii2D = torch::zeros({_xyz.size(0)}).to(torch::kCUDA, true);
+    _scaling = torch::log(torch::sqrt(dist2)).unsqueeze(-1).repeat({1, 3}).to(torch::kCUDA, false);
+    _rotation = torch::zeros({_xyz.size(0), 4}).index_put_({torch::indexing::Slice(), 0}, 1).to(torch::kCUDA, false);
+    _opacity = inverse_sigmoid(0.5 * torch::ones({_xyz.size(0), 1})).to(torch::kCUDA, false);
+    _max_radii2D = torch::zeros({_xyz.size(0)}).to(torch::kCUDA, false);
 
     // colors
     auto colorType = torch::TensorOptions().dtype(torch::kUInt8);
@@ -134,7 +134,6 @@ void prune_optimizer(gs::optim::Adam* optimizer, const torch::Tensor& mask, torc
 
     //    std::cout << "prune_optimizer: " << gs::optim::Map_param_type_to_string(param_type);
     //    adam_param->Set_Step(adam_param->Get_Step().index_select(0, mask));
-    adam_param->Set_Param(old_tensor);
 }
 
 void GaussianModel::prune_points(torch::Tensor mask) {
@@ -160,7 +159,6 @@ void cat_tensors_to_optimizer(gs::optim::Adam* optimizer,
 
     auto adam_param = optimizer->GetAdamParameter(param_type);
     old_tensor = torch::cat({old_tensor, extension_tensor}, 0);
-    adam_param->Set_Param(old_tensor);
     adam_param->Set_Exp_Avg(torch::cat({adam_param->Get_Exp_Avg(), torch::zeros_like(extension_tensor)}, 0));
     //    std::cout << "cat_tensors_to_optimizer: " << gs::optim::Map_param_type_to_string(param_type);
     const auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
@@ -241,7 +239,7 @@ void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float e
     grads.index_put_({grads.isnan()}, 0.0);
 
     _xyz = _optimizer->GetAdamParameter(gs::optim::ParamType::Pos)->Get_Param();
-
+    _features_dc = _optimizer->GetAdamParameter(gs::optim::ParamType::Features_dc)->Get_Param();
     _features_rest = _optimizer->GetAdamParameter(gs::optim::ParamType::Features_rest)->Get_Param();
     _scaling = _optimizer->GetAdamParameter(gs::optim::ParamType::Scaling)->Get_Param();
     _rotation = _optimizer->GetAdamParameter(gs::optim::ParamType::Rotation)->Get_Param();
@@ -249,11 +247,11 @@ void GaussianModel::Densify_and_prune(float max_grad, float min_opacity, float e
 
     densify_and_clone(grads, max_grad, extent);
     densify_and_split(grads, max_grad, extent, min_opacity, max_screen_size);
+    Set_Params();
 }
 
 void GaussianModel::Add_densification_stats(torch::Tensor& grad_means2D, torch::Tensor& update_filter) {
-    auto filtered_grad = grad_means2D.index_select(0, update_filter.nonzero().squeeze()).slice(1, 0, 2).norm(2, -1, true);
-    _xyz_gradient_accum.index_put_({update_filter}, _xyz_gradient_accum.index_select(0, update_filter.nonzero().squeeze()) + filtered_grad);
+    _xyz_gradient_accum.index_put_({update_filter}, _xyz_gradient_accum.index_select(0, update_filter.nonzero().squeeze()) + grad_means2D.index_select(0, update_filter.nonzero().squeeze()).slice(1, 0, 2).norm(2, -1, true));
     _denom.index_put_({update_filter}, _denom.index_select(0, update_filter.nonzero().squeeze()) + 1);
 }
 
