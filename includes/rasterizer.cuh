@@ -7,7 +7,7 @@
 #include "serialization.h"
 #include <utility>
 
-#define WRITE_TEST_DATA
+//#define WRITE_TEST_DATA
 #undef WRITE_TEST_DATA
 
 namespace gs {
@@ -53,7 +53,6 @@ namespace gs {
     std::tuple<torch::Tensor, torch::Tensor> rasterize_gaussians(
         SaveForBackward& saveForBackwars,
         torch::Tensor means3D,
-        torch::Tensor means2D,
         torch::Tensor sh,
         torch::Tensor colors_precomp,
         torch::Tensor opacities,
@@ -67,7 +66,6 @@ namespace gs {
         static std::tuple<torch::Tensor, torch::Tensor> Forward(
             SaveForBackward& saveForBackward,
             torch::Tensor means3D,
-            torch::Tensor means2D,
             torch::Tensor sh,
             torch::Tensor colors_precomp,
             torch::Tensor opacities,
@@ -236,7 +234,7 @@ namespace gs {
 #endif
             // return gradients for all inputs, 19 in total. :D
             return {grad_means3D,
-                    grad_means2D,
+                    grad_means2D.clone(),
                     grad_sh,
                     grad_colors_precomp,
                     grad_opacities,
@@ -261,7 +259,6 @@ namespace gs {
 
         std::tuple<torch::Tensor, torch::Tensor> Forward_RG(SaveForBackward& saveForBackwars,
                                                             torch::Tensor means3D,
-                                                            torch::Tensor means2D,
                                                             torch::Tensor opacities,
                                                             torch::Tensor shs = torch::Tensor(),
                                                             torch::Tensor colors_precomp = torch::Tensor(),
@@ -298,7 +295,6 @@ namespace gs {
             auto [color, radii] = gs::rasterize_gaussians(
                 saveForBackwars,
                 means3D,
-                means2D,
                 shs,
                 colors_precomp,
                 opacities,

@@ -58,10 +58,10 @@ namespace gs {
             const auto lp_x_q_C_s_p = torch::nn::functional::conv2d(lp_x * cs_x, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
 
             const auto new_p = l_p * cs_x;
-            auto c1 = torch::nn::functional::conv2d(new_p, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel)) * img2;
-            auto c2 = -torch::nn::functional::conv2d(new_p * mu2, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
-            auto c3 = -torch::nn::functional::conv2d(new_p * cs_p, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel)) * img1;
-            auto c4 = torch::nn::functional::conv2d(new_p * cs_p * mu1, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
+            const auto c1 = torch::nn::functional::conv2d(new_p, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel)) * img2;
+            const auto c2 = -torch::nn::functional::conv2d(new_p * mu2, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
+            const auto c3 = -torch::nn::functional::conv2d(new_p * cs_p, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel)) * img1;
+            const auto c4 = torch::nn::functional::conv2d(new_p * cs_p * mu1, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
             torch::Tensor dL_ssim_dimg1 = (lp_x_q_C_s_p + c1 + c2 + c3 + c4) / N_sq;
 
             return {ssim_map.mean(), dL_ssim_dimg1};

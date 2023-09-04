@@ -48,7 +48,8 @@ public:
                       const torch::Tensor& grad_opacities,
                       const torch::Tensor& grad_scales,
                       const torch::Tensor& grad_rotations);
-    void Set_Params();
+    void Set_Optimizer_Params();
+    void Update_Params();
 
 public:
     // should not be public or it should maybe be pulled out here. Not sure yet

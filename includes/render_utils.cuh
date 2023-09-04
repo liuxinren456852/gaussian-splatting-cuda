@@ -9,11 +9,11 @@
 #include <cmath>
 #include <torch/torch.h>
 
-inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> render(gs::SaveForBackward& saveForBackwars,
-                                                                                     Camera& viewpoint_camera,
-                                                                                     GaussianModel& gaussianModel,
-                                                                                     torch::Tensor& bg_color,
-                                                                                     float scaling_modifier = 1.0) {
+inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> render(gs::SaveForBackward& saveForBackwars,
+                                                                      Camera& viewpoint_camera,
+                                                                      GaussianModel& gaussianModel,
+                                                                      torch::Tensor& bg_color,
+                                                                      float scaling_modifier = 1.0) {
     // Ensure background tensor (bg_color) is on GPU!
     bg_color = bg_color.to(torch::kCUDA);
 
@@ -35,7 +35,6 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
     rasterizer.SetRasterizerInput(raster_settings);
 
     auto means3D = gaussianModel.Get_xyz();
-    auto means2D = torch::zeros_like(gaussianModel.Get_xyz());
     auto opacity = gaussianModel.Get_opacity();
 
     auto scales = gaussianModel.Get_scaling();
@@ -51,7 +50,6 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
     auto [rendererd_image, radii] = rasterizer.Forward_RG(
         saveForBackwars,
         means3D,
-        means2D,
         opacity,
         shs,
         colors_precomp,
@@ -61,6 +59,6 @@ inline std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> re
 
     // Apply visibility filter to remove occluded Gaussians.
     // TODO: I think there is no real use for means2D, isn't it?
-    // render, viewspace_points, visibility_filter, radii
-    return {rendererd_image, means2D, radii > 0, radii};
+    // render, visibility_filter, radii
+    return {rendererd_image, radii > 0, radii};
 }

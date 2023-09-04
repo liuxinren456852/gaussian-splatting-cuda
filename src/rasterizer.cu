@@ -7,7 +7,6 @@ namespace gs {
     std::tuple<torch::Tensor, torch::Tensor> rasterize_gaussians(
         SaveForBackward& saveForBackwards,
         torch::Tensor means3D,
-        torch::Tensor means2D,
         torch::Tensor sh,
         torch::Tensor colors_precomp,
         torch::Tensor opacities,
@@ -40,7 +39,6 @@ namespace gs {
         }
         auto prefiltered = torch::tensor(raster_settings.prefiltered, device);
 
-        means2D = means2D.to(device);
         means3D = means3D.to(device);
         sh = sh.to(device);
         colors_precomp = colors_precomp.to(device);
@@ -52,7 +50,6 @@ namespace gs {
         auto [color, radii] = _RasterizeGaussians::Forward(
             saveForBackwards,
             means3D,
-            means2D,
             sh,
             colors_precomp,
             opacities,

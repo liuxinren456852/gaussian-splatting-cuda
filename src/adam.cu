@@ -63,7 +63,7 @@ namespace gs {
             _d_params_grad = torch::zeros_like(_d_params);
             _d_avg = torch::zeros_like(_d_params);
             _d_avg_sq = torch::zeros_like(_d_params);
-            _d_steps = torch::zeros({_d_params.size(0), 1}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
+            _d_steps = torch::zeros_like(_d_params, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
         }
 
         AdamParameter::~AdamParameter() {
@@ -76,15 +76,29 @@ namespace gs {
             //                std::cout << "\nAdamUpdatePos_Scaling_Kernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
             //                std::cout << std::setprecision(6) << "lr " << _lr << ", beta1 " << _beta1 << ", beta2 " << _beta2 << std::endl;
             // Ensure all tensors are on the same device as params
+            _d_steps += 1; // Assuming _d_steps is a tensor with the same shape as _d_params
+
+            // Move tensors to the same device if needed
             _d_params_grad = _d_params_grad.to(_d_params.device());
             _d_avg = _d_avg.to(_d_params_grad.device());
-            _d_avg = _d_avg.to(_d_params_grad.device());
+            _d_avg_sq = _d_avg_sq.to(_d_params_grad.device());
+            _d_steps = _d_steps.to(_d_params_grad.device());
 
             // Update biased first and second moment estimates
-            _d_avg = _beta1 * _d_avg + (1.f - _beta1) * _d_params_grad;
-            _d_avg_sq = _beta2 * _d_avg_sq + (1.f - _beta2) * _d_params_grad * _d_params_grad;
+            _d_avg.mul_(_beta1).add_(_d_params_grad, 1.f - _beta1);
+            _d_avg_sq.mul_(_beta2).addcmul_(_d_params_grad, _d_params_grad, 1.f - _beta2);
 
-            _d_params -= _lr * _d_avg / (torch::sqrt(_d_avg_sq) + _epsilon);
+            // Compute debiased first and second moment estimates
+            // Since _d_steps has the same dimensionality as _d_params, we can perform element-wise operations
+            const auto bias_correction1 = 1.f - torch::pow(_beta1, _d_steps);
+            const auto bias_correction2 = 1.f - torch::pow(_beta2, _d_steps);
+
+            const auto step_size = _lr / bias_correction1;
+            const auto bias_correction2_sqrt = bias_correction2.sqrt();
+            const auto denom = (_d_avg_sq.sqrt() / bias_correction2_sqrt).add_(_epsilon);
+
+            // Update parameters
+            _d_params -= step_size * _d_avg_sq / denom;
             // Update parameters
         }
 
