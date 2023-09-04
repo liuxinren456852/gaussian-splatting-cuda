@@ -42,7 +42,7 @@ std::vector<int> get_random_indices(int max_index) {
     std::vector<int> indices(max_index);
     std::iota(indices.begin(), indices.end(), 0);
     // Shuffle the vector
-    std::shuffle(indices.begin(), indices.end(), std::default_random_engine());
+    //    std::shuffle(indices.begin(), indices.end(), std::default_random_engine());
     return indices;
 }
 
@@ -197,38 +197,39 @@ int main(int argc, char* argv[]) {
         //        grad_rotations.index_put_({grad_rotations.isnan()}, 0.f);
 
         // Update status line
-        if (iter % 100 == 0) {
-            auto cur_time = std::chrono::steady_clock::now();
-            std::chrono::duration<double> time_elapsed = cur_time - start_time;
-            // XXX shouldn't have to create a new stringstream, but resetting takes multiple calls
-            std::stringstream status_line;
-            // XXX Use thousand separators, but doesn't work for some reason
-            status_line.imbue(std::locale(""));
-            status_line
-                << "\rIter: " << std::setw(6) << iter
-                << "  Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>();
-            if (optimParams.early_stopping) {
-                status_line
-                    << "  ACR: " << std::fixed << std::setw(9) << std::setprecision(6) << avg_converging_rate;
-            }
-            status_line
-                << "  Splats: " << std::setw(10) << (int)gaussians.Get_xyz().size(0)
-                << "  Time: " << std::fixed << std::setw(8) << std::setprecision(3) << time_elapsed.count() << "s"
-                << "  Avg iter/s: " << std::fixed << std::setw(5) << std::setprecision(1) << 1.0 * iter / time_elapsed.count()
-                << "  " // Some extra whitespace, in case a "Pruning ... points" message gets printed after
-                ;
-            const int curlen = status_line.str().length();
-            const int ws = last_status_len - curlen;
-            if (ws > 0)
-                status_line << std::string(ws, ' ');
-            std::cout << status_line.str() << std::flush;
-            last_status_len = curlen;
-        }
+        //        if (iter % 100 == 0) {
+        //            auto cur_time = std::chrono::steady_clock::now();
+        //            std::chrono::duration<double> time_elapsed = cur_time - start_time;
+        //            // XXX shouldn't have to create a new stringstream, but resetting takes multiple calls
+        //            std::stringstream status_line;
+        //            // XXX Use thousand separators, but doesn't work for some reason
+        //            status_line.imbue(std::locale(""));
+        //            status_line
+        //                << "\rIter: " << std::setw(6) << iter
+        //                << "  Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>();
+        //            if (optimParams.early_stopping) {
+        //                status_line
+        //                    << "  ACR: " << std::fixed << std::setw(9) << std::setprecision(6) << avg_converging_rate;
+        //            }
+        //            status_line
+        //                << "  Splats: " << std::setw(10) << (int)gaussians.Get_xyz().size(0)
+        //                << "  Time: " << std::fixed << std::setw(8) << std::setprecision(3) << time_elapsed.count() << "s"
+        //                << "  Avg iter/s: " << std::fixed << std::setw(5) << std::setprecision(1) << 1.0 * iter / time_elapsed.count()
+        //                << "  " // Some extra whitespace, in case a "Pruning ... points" message gets printed after
+        //                ;
+        //            const int curlen = status_line.str().length();
+        //            const int ws = last_status_len - curlen;
+        //            if (ws > 0)
+        //                status_line << std::string(ws, ' ');
+        //            std::cout << status_line.str() << std::flush;
+        //            last_status_len = curlen;
+        //        }
 
         if (optimParams.early_stopping) {
             avg_converging_rate = loss_monitor.Update(loss.item<float>());
         }
         loss_add += loss.item<float>();
+        std::cout << "Iter: ," << iter << " Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>() << std::endl;
 
         {
             auto visible_max_radii = gaussians._max_radii2D.masked_select(visibility_filter);
@@ -272,9 +273,9 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
-            if (optimParams.empty_gpu_cache && iter % 100) {
-                c10::cuda::CUDACachingAllocator::emptyCache();
-            }
+            //            if (optimParams.empty_gpu_cache && iter % 100) {
+            //                c10::cuda::CUDACachingAllocator::emptyCache();
+            //            }
         }
     }
 

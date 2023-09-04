@@ -203,7 +203,6 @@ void GaussianModel::densify_and_split(torch::Tensor& grads, float grad_threshold
     torch::Tensor new_features_rest = _features_rest.index_select(0, indices).repeat({N, 1, 1});
     torch::Tensor new_opacity = _opacity.index_select(0, indices).repeat({N, 1});
 
-    std::cout << "Densifying and split " << torch::sum(selected_pts_mask).item<int>() << " points\n";
     densification_postfix(new_xyz, new_features_dc, new_features_rest, new_scaling, new_rotation, new_opacity);
 
     torch::Tensor prune_filter = torch::cat({selected_pts_mask.squeeze(-1), torch::zeros({N * selected_pts_mask.sum().item<int>()}).to(torch::kBool).to(torch::kCUDA)});
@@ -229,7 +228,6 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
     torch::Tensor new_scaling = _scaling.index_select(0, indices);
     torch::Tensor new_rotation = _rotation.index_select(0, indices);
 
-    std::cout << "\nDensifying and clone " << torch::sum(selected_pts_mask).item<int>() << " points\n";
     densification_postfix(new_xyz, new_features_dc, new_features_rest, new_scaling, new_rotation, new_opacity);
 }
 

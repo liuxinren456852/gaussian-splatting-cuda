@@ -205,7 +205,32 @@ namespace gs {
         }
 
         void AdamParameter::Set_Gradient(torch::Tensor d_param_grad) {
+            if (_d_params_grad.dim() == 2) {
+                if (d_param_grad.size(1) != _d_params_grad.size(1)) {
+                    throw std::runtime_error("Gradient shape does not match parameter shape for " + Map_param_type_to_string(GetType()));
+                }
+            } else if (_d_params_grad.dim() == 3) {
+                if (d_param_grad.size(1) != _d_params_grad.size(1) || d_param_grad.size(2) != _d_params_grad.size(2)) {
+                    throw std::runtime_error("Gradient shape does not match parameter shape for " + Map_param_type_to_string(GetType()));
+                }
+            } else {
+                throw std::runtime_error("Gradient shape does not match parameter shape for " + Map_param_type_to_string(GetType()));
+            }
             _d_params_grad = d_param_grad;
+        }
+        void AdamParameter::Set_Param(torch::Tensor d_param) {
+            if (d_param.dim() == 2) {
+                if (d_param.size(1) != _d_params.size(1)) {
+                    throw std::runtime_error("Gradient shape does not match parameter shape for " + Map_param_type_to_string(GetType()));
+                }
+            } else if (d_param.dim() == 3) {
+                if (d_param.size(1) != _d_params.size(1) || d_param.size(2) != _d_params.size(2)) {
+                    throw std::runtime_error("Params shape does not match parameter shape for " + Map_param_type_to_string(GetType()));
+                }
+            } else {
+                throw std::runtime_error("Params shape does not match parameter shape for " + Map_param_type_to_string(GetType()));
+            }
+            _d_params = d_param;
         }
 
         void Adam::AddParameter(std::shared_ptr<AdamParameterBase> param) {
