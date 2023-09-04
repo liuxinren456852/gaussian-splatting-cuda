@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "adam.cuh"
 #include "general_utils.cuh"
 #include "parameters.cuh"
 #include "point_cloud.cuh"
@@ -13,8 +12,7 @@
 #include <string>
 #include <torch/torch.h>
 
-namespace gs {
-
+namespace ref {
     class GaussianModel {
     public:
         explicit GaussianModel(int sh_degree);
@@ -33,7 +31,9 @@ namespace gs {
         inline torch::Tensor Get_opacity() const { return torch::sigmoid(_opacity); }
         inline torch::Tensor Get_rotation() const { return torch::nn::functional::normalize(_rotation); }
         torch::Tensor Get_features() const;
+        torch::Tensor Get_covariance(float scaling_modifier = 1.0);
         int Get_active_sh_degree() const { return _active_sh_degree; }
+        int Get_max_sh_degree() const { return _max_sh_degree; }
         torch::Tensor Get_scaling() { return torch::exp(_scaling); }
 
         // Methods
@@ -45,18 +45,11 @@ namespace gs {
         void Add_densification_stats(torch::Tensor& viewspace_point_tensor, torch::Tensor& update_filter);
         void Densify_and_prune(float max_grad, float min_opacity, float extent, float max_screen_size);
         void Save_ply(const std::filesystem::path& file_path, int iteration, bool isLastIteration);
-        void Update_Grads(const torch::Tensor& grad_means3D,
-                          const torch::Tensor& grad_sh, // needs to be splitted or rather vice versa
-                          const torch::Tensor& grad_opacities,
-                          const torch::Tensor& grad_scales,
-                          const torch::Tensor& grad_rotations);
-        void Set_Optimizer_Params();
-        void Update_Params();
 
     public:
         // should not be public or it should maybe be pulled out here. Not sure yet
         // This is all public mostly for debugging purposes
-        std::unique_ptr<gs::optim::Adam> _optimizer;
+        std::unique_ptr<torch::optim::Adam> _optimizer;
         torch::Tensor _max_radii2D;
 
     private:
@@ -72,7 +65,7 @@ namespace gs {
         void densify_and_split(torch::Tensor& grads, float grad_threshold, float scene_extent, float min_opacity, float max_screen_size);
         std::vector<std::string> construct_list_of_attributes();
 
-    private:
+    public:
         int _active_sh_degree = 0.f;
         int _max_sh_degree = 0.f;
         float _spatial_lr_scale = 0.f;
@@ -88,4 +81,4 @@ namespace gs {
         torch::Tensor _xyz_gradient_accum;
         torch::Tensor _opacity;
     };
-} // namespace gs
+} // namespace ref

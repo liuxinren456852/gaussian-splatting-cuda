@@ -1,28 +1,28 @@
 #pragma once
 
+#include "ref_gaussian.cuh"
 #include "scene_info.cuh"
 #include <memory>
 #include <vector>
 
 class CameraInfo;
-class GaussianModel;
 struct ModelParameters;
 class Camera;
+namespace ref {
 
-namespace gs {
     class GaussianModel;
 
     class Scene {
     public:
-        Scene(gs::GaussianModel& gaussians, const ModelParameters& params);
+        Scene(GaussianModel& gaussians, const ModelParameters& params);
         [[nodiscard]] int Get_camera_count() const { return _cameras.size(); }
         Camera& Get_training_camera(int i) { return _cameras[i]; }
         [[nodiscard]] float Get_cameras_extent() const { return static_cast<float>(_scene_infos->_nerf_norm_radius); }
 
     private:
-        gs::GaussianModel& _gaussians;
+        GaussianModel& _gaussians;
         const ModelParameters& _params;
         std::vector<Camera> _cameras;
         std::unique_ptr<SceneInfo> _scene_infos;
     };
-} // namespace gs
+} // namespace ref

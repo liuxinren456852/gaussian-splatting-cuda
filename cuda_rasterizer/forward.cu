@@ -266,6 +266,7 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
     auto block = cg::this_thread_block();
     uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
     uint2 pix_min = {block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y};
+    uint2 pix_max = {min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y, H)};
     uint2 pix = {pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y};
     uint32_t pix_id = W * pix.y + pix.x;
     float2 pixf = {(float)pix.x, (float)pix.y};
@@ -289,7 +290,7 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
     float T = 1.0f;
     uint32_t contributor = 0;
     uint32_t last_contributor = 0;
-    float C[CHANNELS] = {0.f};
+    float C[CHANNELS] = {0};
 
     // Iterate over batches until all done or range is complete
     for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE) {
@@ -316,11 +317,9 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             // Resample using conic matrix (cf. "Surface
             // Splatting" by Zwicker et al., 2001)
             float2 xy = collected_xy[j];
-            float2 d = {__fmaf_rn(1.f, xy.x, -pixf.x),
-                        __fmaf_rn(1.f, xy.y, -pixf.y)};
+            float2 d = {xy.x - pixf.x, xy.y - pixf.y};
             float4 con_o = collected_conic_opacity[j];
-
-            float power = __fmaf_rn(-con_o.y * d.x, d.y, __fmaf_rn(-0.5f * con_o.x, d.x * d.x, __fmaf_rn(-0.5f * con_o.z, d.y * d.y, 0.f)));
+            float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
             if (power > 0.0f)
                 continue;
 
@@ -328,18 +327,18 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             // Obtain alpha by multiplying with Gaussian opacity
             // and its exponential falloff from mean.
             // Avoid numerical instabilities (see paper appendix).
-            float alpha = fminf(0.99f, __fmaf_rn(con_o.w, expf(power), 0.f));
-            if (alpha < ALPHA_THRESHOLD_FWD)
+            float alpha = min(0.99f, con_o.w * exp(power));
+            if (alpha < 1.0f / 255.0f)
                 continue;
-            float test_T = __fmaf_rn(T, -alpha, T);
-            if (test_T < ALPHA_MIN_FWD) {
+            float test_T = T * (1 - alpha);
+            if (test_T < 0.0001f) {
                 done = true;
                 continue;
             }
 
             // Eq. (3) from 3D Gaussian splatting paper.
             for (int ch = 0; ch < CHANNELS; ch++)
-                C[ch] = __fmaf_rn(features[collected_id[j] * CHANNELS + ch], __fmaf_rn(alpha, T, 0.f), C[ch]);
+                C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 
             T = test_T;
 
@@ -355,7 +354,7 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
         final_T[pix_id] = T;
         n_contrib[pix_id] = last_contributor;
         for (int ch = 0; ch < CHANNELS; ch++)
-            out_color[ch * H * W + pix_id] = __fmaf_rn(T, bg_color[ch], C[ch]);
+            out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
     }
 }
 

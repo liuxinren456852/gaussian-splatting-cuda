@@ -446,9 +446,9 @@ std::unique_ptr<SceneInfo> read_colmap_scene_info(std::filesystem::path file_pat
     auto ncams = sceneInfos->_cameras.size();
     const float image_mpixels = cam0._img_w * cam0._img_h / 1'000'000.0f;
     std::cout << "Training with " << ncams << " images of "
-        << cam0._img_w << " x " << cam0._img_h << " pixels ("
-        << std::fixed << std::setprecision(3) << image_mpixels << " Mpixel per image, "
-        << std::fixed << std::setprecision(1) << image_mpixels*ncams << " Mpixel total)" << std::endl;
+              << cam0._img_w << " x " << cam0._img_h << " pixels ("
+              << std::fixed << std::setprecision(3) << image_mpixels << " Mpixel per image, "
+              << std::fixed << std::setprecision(1) << image_mpixels * ncams << " Mpixel total)" << std::endl;
 
     auto [translate, radius] = getNerfppNorm(sceneInfos->_cameras);
     sceneInfos->_nerf_norm_radius = radius;

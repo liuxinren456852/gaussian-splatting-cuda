@@ -4,6 +4,10 @@
 #include "loss_utils.cuh"
 #include "parameters.cuh"
 #include "rasterizer.cuh"
+#include "ref_gaussian.cuh"
+#include "ref_loss_utils.cuh"
+#include "ref_render_utils.cuh"
+#include "ref_scene.cuh"
 #include "render_utils.cuh"
 #include "scene.cuh"
 #include <args.hxx>
@@ -138,9 +142,14 @@ int main(int argc, char* argv[]) {
     };
     Write_model_parameters_to_file(modelParams);
 
-    auto gaussians = GaussianModel(modelParams.sh_degree);
-    auto scene = Scene(gaussians, modelParams);
+    auto gaussians = gs::GaussianModel(modelParams.sh_degree);
+    auto scene = gs::Scene(gaussians, modelParams);
     gaussians.Training_setup(optimParams);
+
+    auto ref_gaussians = ref::GaussianModel(modelParams.sh_degree);
+    auto ref_scene = ref::Scene(ref_gaussians, modelParams);
+    ref_gaussians.Training_setup(optimParams);
+
     if (!torch::cuda::is_available()) {
         // At the moment, I want to make sure that my GPU is utilized.
         std::cout << "CUDA is not available! Training on CPU." << std::endl;
@@ -148,10 +157,12 @@ int main(int argc, char* argv[]) {
     }
     auto pointType = torch::TensorOptions().dtype(torch::kFloat32);
     auto background = modelParams.white_background ? torch::tensor({1.f, 1.f, 1.f}) : torch::tensor({0.f, 0.f, 0.f}, pointType).to(torch::kCUDA);
+    auto ref_background = modelParams.white_background ? torch::tensor({1.f, 1.f, 1.f}) : torch::tensor({0.f, 0.f, 0.f}, pointType).to(torch::kCUDA);
 
     const int window_size = 11;
     const int channel = 3;
     const auto conv_window = gs::loss::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
+    const auto ref_conv_window = gs::loss::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
     const int camera_count = scene.Get_camera_count();
 
     std::vector<int> indices;
@@ -167,27 +178,51 @@ int main(int argc, char* argv[]) {
             indices = get_random_indices(camera_count);
         }
         const int camera_index = indices.back();
-        auto& cam = scene.Get_training_camera(camera_index);
-        auto gt_image = cam.Get_original_image().to(torch::kCUDA);
+        auto cam = scene.Get_training_camera(camera_index);
+        auto ref_cam = scene.Get_training_camera(camera_index);
+        auto gt_image = cam.Get_original_image().clone().to(torch::kCUDA);
+        auto ref_gt_image = cam.Get_original_image().clone().to(torch::kCUDA);
         indices.pop_back(); // remove last element to iterate over all cameras randomly
         if (iter % 1000 == 0) {
             gaussians.One_up_sh_degree();
+            ref_gaussians.One_up_sh_degree();
         }
 
         // Render
-        gs::SaveForBackward saveForBackwars;
-        auto [image, visibility_filter, radii] = render(saveForBackwars, cam, gaussians, background);
+        auto [ref_image, ref_viewspace_points, ref_visibility_filter, ref_radii] = ref::render(ref_cam, ref_gaussians, ref_background);
+        ref_image.set_requires_grad(true);
+        ref_image.retain_grad();
+        ref_gt_image.set_requires_grad(true);
+        ref_gt_image.retain_grad();
+        ref_gaussians._optimizer->zero_grad();
+        auto ref_L1l = ref::l1_loss(ref_image, ref_gt_image);
+        auto ref_ssim_loss = ref::ssim(ref_image, ref_gt_image, ref_conv_window, window_size, channel);
+        auto ref_loss = (1.f - optimParams.lambda_dssim) * ref_L1l + optimParams.lambda_dssim * (1.f - ref_ssim_loss);
+        ref_loss.backward();
+
+        if (torch::all(torch::eq(ref_gt_image, 0.0)).item<bool>()) {
+            std::cout << "All elements are zero." << std::endl;
+        } else {
+            std::cout << "Not all elements are zero." << std::endl;
+        }
+        cudaDeviceSynchronize();
         // Loss Computations
+        torch::Tensor grad;
+        {
+            torch::NoGradGuard no_grad;
+            grad = ref_image.grad().clone().set_requires_grad(false);
+        }
+        gs::SaveForBackward saveForBackwars;
+        auto [image, visibility_filter, radii] = gs::render(saveForBackwars, cam, gaussians, background);
         auto [L1l, dL_l1_loss] = gs::loss::l1_loss(image, gt_image);
         auto [ssim_loss, dL_ssim_dimg1] = gs::loss::ssim(image, gt_image, conv_window, window_size, channel);
         auto loss = (1.f - optimParams.lambda_dssim) * L1l + optimParams.lambda_dssim * (1.f - ssim_loss);
 
-        // Calculate the loss derivative with respect to the rendering output from the forward pass
         const auto dloss_dssim = -optimParams.lambda_dssim;
         const auto dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
         const auto dloss_dimage = dloss_dLl1 * dL_l1_loss + dloss_dssim * dL_ssim_dimg1;
-        //        std::cout << std::setprecision(6) << "iter: " << iter << " loss: " << loss.item<float>() << std::endl;
-        auto [grad_means3D, grad_means2D, grad_sh, grad_color_precomp, grad_opacities, grad_scales, grad_rotations, grad_cov3Ds_precomp] = gs::_RasterizeGaussians::Backward(saveForBackwars, dloss_dimage);
+        cudaDeviceSynchronize();
+        auto [grad_means3D, grad_means2D, grad_sh, grad_color_precomp, grad_opacities, grad_scales, grad_rotations, grad_cov3Ds_precomp] = gs::_RasterizeGaussians::Backward(saveForBackwars, grad);
         gaussians.Update_Grads(grad_means3D, grad_sh, grad_opacities, grad_scales, grad_rotations);
         //        grad_means3D.index_put_({grad_means3D.isnan()}, 0.f);
         //        grad_means2D.index_put_({grad_means2D.isnan()}, 0.f);
@@ -196,6 +231,7 @@ int main(int argc, char* argv[]) {
         //        grad_scales.index_put_({grad_scales.isnan()}, 0.f);
         //        grad_rotations.index_put_({grad_rotations.isnan()}, 0.f);
 
+        cudaDeviceSynchronize();
         // Update status line
         //        if (iter % 100 == 0) {
         //            auto cur_time = std::chrono::steady_clock::now();
@@ -229,41 +265,137 @@ int main(int argc, char* argv[]) {
             avg_converging_rate = loss_monitor.Update(loss.item<float>());
         }
         loss_add += loss.item<float>();
-        std::cout << "Iter: " << iter << ", Splats: " << grad_means2D.size(0) << ", Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>() << std::endl;
+        std::cout << "    Iter: " << iter << ", Splats: " << grad_means2D.size(0) << ", Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>() << std::endl;
+        std::cout << "Ref Iter: " << iter << ", Splats: " << ref_visibility_filter.size(0) << ", Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << ref_loss.item<float>() << std::endl;
+        //        std::cout << "Diff Iter: " << iter << ", Diff Splats: " << std::abs(ref_visibility_filter.size(0) - grad_means2D.size(0)) << ", Diff Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << std::abs(loss.item<float>() - ref_loss.item<float>()) << std::endl;
 
         {
+            torch::NoGradGuard no_grad;
+            double abs_tol = 1e-3;
+            double rel_tol = 1e-3;
+            ts::print_debug_info(ref_image.grad(), "ref_image.grad()");
+            ts::print_debug_info(dloss_dimage, "dloss_dimage");
+            if (!torch::allclose(dloss_dimage, ref_image.grad(), 1e-5, 1e-5)) {
+                std::cout << "Diff dloss_dimage" << std::endl;
+                auto diff = torch::abs(dloss_dimage - ref_image.grad());
+                auto max = torch::max(diff);
+                auto min = torch::min(diff);
+                std::cout << "Diff dloss_dimage Max: " << max << ", Min: " << min << std::endl;
+            }
+
+            if (!torch::allclose(grad_means2D, ref_viewspace_points.grad(), rel_tol, abs_tol)) {
+                std::cout << "Diff grad_means 2D" << std::endl;
+                auto diff = torch::abs(grad_means2D - ref_viewspace_points.grad());
+                auto max = torch::max(diff);
+                auto min = torch::min(diff);
+                std::cout << "Diff grad_means 2D Max: " << max << ", Min: " << min << std::endl;
+            }
+
+            if (!torch::allclose(grad_means3D, ref_gaussians._xyz.grad(), rel_tol, abs_tol)) {
+                std::cout << "Diff grad_means 3D" << std::endl;
+                auto diff = torch::abs(grad_means3D - ref_gaussians._xyz.grad());
+                auto max = torch::max(diff);
+                auto min = torch::min(diff);
+                std::cout << "Diff grad_means 3D Max: " << max << ", Min: " << min << std::endl;
+            }
+
+            const auto grad_features_dc = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1), torch::indexing::Slice()}).contiguous();
+            const auto grad_features_rest = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None), torch::indexing::Slice()}).contiguous();
+
+            if (!torch::allclose(grad_features_dc, ref_gaussians._features_dc.grad(), rel_tol, abs_tol)) {
+                std::cout << "Diff _features_dc" << std::endl;
+                auto diff = torch::abs(grad_features_dc - ref_gaussians._features_dc.grad());
+                auto max = torch::max(diff);
+                auto min = torch::min(diff);
+                std::cout << "Diff _features_dc Max: " << max << ", Min: " << min << std::endl;
+            }
+
+            if (!torch::allclose(grad_features_rest, ref_gaussians._features_rest.grad(), rel_tol, abs_tol)) {
+                std::cout << "Diff _features_rest" << std::endl;
+                auto diff = torch::abs(grad_features_rest - ref_gaussians._features_rest.grad());
+                auto max = torch::max(diff);
+                auto min = torch::min(diff);
+                std::cout << "Diff _features_rest Max: " << max << ", Min: " << min << std::endl;
+            }
+
+            ts::print_debug_info(grad_opacities, "grad_opacities");
+            ts::print_debug_info(ref_gaussians._opacity.grad(), "ref_gaussians._opacity.grad()");
+            if (!torch::allclose(grad_opacities, ref_gaussians._opacity.grad(), rel_tol, abs_tol)) {
+                std::cout << "Diff _opacity" << std::endl;
+                auto diff = torch::abs(grad_opacities - ref_gaussians._opacity.grad());
+                auto max = torch::max(diff);
+                auto min = torch::min(diff);
+                std::cout << "Diff _opacity Max: " << max << ", Min: " << min << std::endl;
+            }
+
+            ts::print_debug_info(grad_scales, "grad_scales");
+            ts::print_debug_info(ref_gaussians._scaling.grad(), "ref_gaussians._scaling.grad()");
+            if (!torch::allclose(grad_scales, ref_gaussians._scaling.grad(), rel_tol, abs_tol)) {
+                std::cout << "Diff _scaling" << std::endl;
+                auto diff = torch::abs(grad_scales - ref_gaussians._scaling.grad());
+                auto max = torch::max(diff);
+                auto min = torch::min(diff);
+                std::cout << "Diff _scaling Max: " << max << ", Min: " << min << std::endl;
+            }
+
+            if (!torch::allclose(grad_rotations, ref_gaussians._rotation.grad(), rel_tol, abs_tol)) {
+                std::cout << "Diff _rotation" << std::endl;
+                auto diff = torch::abs(grad_rotations - ref_gaussians._rotation.grad());
+                auto max = torch::max(diff);
+                auto min = torch::min(diff);
+                std::cout << "Diff _rotation Max: " << max << ", Min: " << min << std::endl;
+            }
+
             auto visible_max_radii = gaussians._max_radii2D.masked_select(visibility_filter);
             auto visible_radii = radii.masked_select(visibility_filter);
             auto max_radii = torch::max(visible_max_radii, visible_radii);
             gaussians._max_radii2D.masked_scatter_(visibility_filter, max_radii);
 
+            auto ref_visible_max_radii = ref_gaussians._max_radii2D.masked_select(ref_visibility_filter);
+            auto ref_visible_radii = ref_radii.masked_select(ref_visibility_filter);
+            auto ref_max_radii = torch::max(ref_visible_max_radii, ref_visible_radii);
+            ref_gaussians._max_radii2D.masked_scatter_(ref_visibility_filter, ref_max_radii);
+
             //  Optimizer step
+            cudaDeviceSynchronize();
             if (iter < optimParams.iterations) {
                 gaussians._optimizer->Step(nullptr);
                 gaussians.Update_Params();
                 gaussians.Update_learning_rate(iter);
+
+                cudaDeviceSynchronize();
+                ref_gaussians._optimizer->step();
+                ref_gaussians._optimizer->zero_grad(true);
+                ref_gaussians.Update_learning_rate(iter);
             }
 
             if (iter == optimParams.iterations) {
                 std::cout << std::endl;
                 gaussians.Save_ply(modelParams.output_path, iter, true);
+                ref_gaussians.Save_ply("ref" + modelParams.output_path.string(), iter, true);
                 break;
             }
 
             if (iter % 7'000 == 0) {
                 gaussians.Save_ply(modelParams.output_path, iter, false);
+                ref_gaussians.Save_ply("ref" + modelParams.output_path.string(), iter, false);
             }
 
             // Densification
             if (iter < optimParams.densify_until_iter) {
                 gaussians.Add_densification_stats(grad_means2D, visibility_filter);
+                ref_gaussians.Add_densification_stats(ref_viewspace_points, ref_visibility_filter);
                 if (iter > optimParams.densify_from_iter && iter % optimParams.densification_interval == 0) {
                     float size_threshold = iter > optimParams.opacity_reset_interval ? 20.f : -1.f;
                     gaussians.Densify_and_prune(optimParams.densify_grad_threshold, 0.005f, scene.Get_cameras_extent(), size_threshold);
+                    cudaDeviceSynchronize();
+                    ref_gaussians.Densify_and_prune(optimParams.densify_grad_threshold, 0.005f, ref_scene.Get_cameras_extent(), size_threshold);
                 }
 
                 if (iter % optimParams.opacity_reset_interval == 0 || (modelParams.white_background && iter == optimParams.densify_from_iter)) {
                     gaussians.Reset_opacity();
+                    cudaDeviceSynchronize();
+                    ref_gaussians.Reset_opacity();
                 }
             }
 

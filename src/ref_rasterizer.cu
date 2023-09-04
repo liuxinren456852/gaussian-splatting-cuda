@@ -1,19 +1,18 @@
 // Copyright (c) 2023 Janusch Patas.
 // All rights reserved. Derived from 3D Gaussian Splatting for Real-Time Radiance Field Rendering software by Inria and MPII.
-#include "rasterizer.cuh"
-#include <torch/torch.h>
+#include "ref_rasterizer.cuh"
 
-namespace gs {
-    std::tuple<torch::Tensor, torch::Tensor> rasterize_gaussians(
-        SaveForBackward& saveForBackwards,
-        torch::Tensor means3D,
-        torch::Tensor sh,
-        torch::Tensor colors_precomp,
-        torch::Tensor opacities,
-        torch::Tensor scales,
-        torch::Tensor rotations,
-        torch::Tensor cov3Ds_precomp,
-        gs::RasterizerInput& raster_settings) {
+namespace ref {
+
+    torch::autograd::tensor_list rasterize_gaussians(torch::Tensor means3D,
+                                                     torch::Tensor means2D,
+                                                     torch::Tensor sh,
+                                                     torch::Tensor colors_precomp,
+                                                     torch::Tensor opacities,
+                                                     torch::Tensor scales,
+                                                     torch::Tensor rotations,
+                                                     torch::Tensor cov3Ds_precomp,
+                                                     ref::GaussianRasterizationSettings raster_settings) {
 
         torch::Device device = torch::kCUDA;
         auto image_height = torch::tensor(raster_settings.image_height, device);
@@ -38,6 +37,7 @@ namespace gs {
             raster_settings.camera_center = raster_settings.camera_center.to(device);
         }
 
+        means2D = means2D.to(device);
         means3D = means3D.to(device);
         sh = sh.to(device);
         colors_precomp = colors_precomp.to(device);
@@ -46,9 +46,9 @@ namespace gs {
         rotations = rotations.to(device);
         cov3Ds_precomp = cov3Ds_precomp.to(device);
 
-        auto [color, radii] = _RasterizeGaussians::Forward(
-            saveForBackwards,
+        return _RasterizeGaussians::apply(
             means3D,
+            means2D,
             sh,
             colors_precomp,
             opacities,
@@ -65,7 +65,5 @@ namespace gs {
             raster_settings.projmatrix,
             sh_degree,
             raster_settings.camera_center);
-        return {color, radii};
     }
-
-} // namespace gs
+} // namespace ref

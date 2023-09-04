@@ -35,20 +35,25 @@ set(HEADERS
         includes/adam.cuh
         includes/read_utils.cuh
         includes/gaussian.cuh
+        includes/ref_gaussian.cuh
         includes/camera.cuh
         includes/loss_monitor.cuh
         includes/image.cuh
         includes/stb_image.h
         includes/point_cloud.cuh
         includes/scene.cuh
+        includes/ref_scene.cuh
         includes/scene_info.cuh
         includes/camera_utils.cuh
         includes/general_utils.cuh
         includes/sh_utils.cuh
         includes/rasterizer.cuh
+        includes/ref_rasterizer.cuh
         includes/parameters.cuh
         includes/loss_utils.cuh
+        includes/ref_loss_utils.cuh
         includes/render_utils.cuh
+        includes/ref_render_utils.cuh
         includes/rasterize_points.cuh
         includes/camera_info.cuh
         includes/debug_utils.cuh
@@ -65,13 +70,16 @@ set(SOURCES
         src/main.cu
         src/read_utils.cu
         src/gaussian.cu
+        src/ref_gaussian.cu
         src/camera.cu
         src/loss_monitor.cu
         src/image.cu
         src/scene.cu
+        src/ref_scene.cu
         src/camera_utils.cu
         src/general_utils.cu
         src/rasterizer.cu
+        src/ref_rasterizer.cu
         src/rasterize_points.cu
         cuda_rasterizer/backward.cu
         cuda_rasterizer/forward.cu

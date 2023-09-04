@@ -3,15 +3,14 @@
 #include "gaussian.cuh"
 #include "parameters.cuh"
 #include "read_utils.cuh"
-#include "scene.cuh"
+#include "ref_scene.cuh"
 
-// TODO: support start from later iterations. Compare original code
-// We also have only training, no testing
-// TODO: support also testing
-namespace gs {
-
-    Scene::Scene(gs::GaussianModel& gaussians, const ModelParameters& params) : _gaussians(gaussians),
-                                                                                _params(params) {
+namespace ref {
+    // TODO: support start from later iterations. Compare original code
+    // We also have only training, no testing
+    // TODO: support also testing
+    Scene::Scene(GaussianModel& gaussians, const ModelParameters& params) : _gaussians(gaussians),
+                                                                            _params(params) {
         // Right now there is only support for colmap
         if (std::filesystem::exists(_params.source_path)) {
             _scene_infos = read_colmap_scene_info(_params.source_path);
@@ -35,4 +34,4 @@ namespace gs {
         // get the parameterr self.cameras.extent
         _gaussians.Create_from_pcd(_scene_infos->_point_cloud, _scene_infos->_nerf_norm_radius);
     }
-} // namespace gs
+} // namespace ref
