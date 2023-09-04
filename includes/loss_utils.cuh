@@ -34,7 +34,7 @@ namespace gs {
         // luminance, and contrast.
         std::pair<torch::Tensor, torch::Tensor> ssim(const torch::Tensor& img1, const torch::Tensor& img2, const torch::Tensor& window, int window_size, int channel) {
 
-            const float N_sq = static_cast<float>(img1.numel()) * static_cast<float>(img1.numel());
+            const uint32_t N_sq = img1.numel() * img1.numel();
             static const float C1 = 0.01f * 0.01f;
             static const float C2 = 0.03f * 0.03f;
 
@@ -62,7 +62,7 @@ namespace gs {
             const auto c2 = -torch::nn::functional::conv2d(new_p * mu2, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
             const auto c3 = -torch::nn::functional::conv2d(new_p * cs_p, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel)) * img1;
             const auto c4 = torch::nn::functional::conv2d(new_p * cs_p * mu1, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
-            torch::Tensor dL_ssim_dimg1 = (lp_x_q_C_s_p + c1 + c2 + c3 + c4) / N_sq;
+            torch::Tensor dL_ssim_dimg1 = (lp_x_q_C_s_p + c1 + c2 + c3 + c4) / static_cast<float>(N_sq);
 
             return {ssim_map.mean(), dL_ssim_dimg1};
         }

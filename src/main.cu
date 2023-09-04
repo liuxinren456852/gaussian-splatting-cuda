@@ -168,7 +168,7 @@ int main(int argc, char* argv[]) {
         }
         const int camera_index = indices.back();
         auto& cam = scene.Get_training_camera(camera_index);
-        auto gt_image = cam.Get_original_image().to(torch::kCUDA, true);
+        auto gt_image = cam.Get_original_image().to(torch::kCUDA);
         indices.pop_back(); // remove last element to iterate over all cameras randomly
         if (iter % 1000 == 0) {
             gaussians.One_up_sh_degree();
@@ -257,7 +257,6 @@ int main(int argc, char* argv[]) {
             if (iter < optimParams.densify_until_iter) {
                 gaussians.Add_densification_stats(grad_means2D, visibility_filter);
                 if (iter > optimParams.densify_from_iter && iter % optimParams.densification_interval == 0) {
-                    // @TODO: Not sure about type
                     float size_threshold = iter > optimParams.opacity_reset_interval ? 20.f : -1.f;
                     gaussians.Densify_and_prune(optimParams.densify_grad_threshold, 0.005f, scene.Get_cameras_extent(), size_threshold);
                 }

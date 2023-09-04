@@ -121,7 +121,7 @@ void GaussianModel::Reset_opacity() {
     _opacity = inverse_sigmoid(torch::ones_like(_opacity, torch::TensorOptions().dtype(torch::kFloat32)) * 0.01f);
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg(torch::zeros_like(_opacity));
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Exp_Avg_Sq(torch::zeros_like(_opacity));
-    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Step(torch::zeros_like(_opacity, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA)));
+    _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Step(torch::zeros({_opacity.size(0), 1}, torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA)));
     _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Param(_opacity);
 }
 
@@ -159,7 +159,7 @@ void cat_tensors_to_optimizer(gs::optim::Adam* optimizer,
     adam_param->Set_Exp_Avg(torch::cat({adam_param->Get_Exp_Avg(), torch::zeros_like(extension_tensor)}, 0));
     adam_param->Set_Exp_Avg_Sq(torch::cat({adam_param->Get_Exp_Avg_Sq(), torch::zeros_like(extension_tensor)}, 0));
     const auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
-    adam_param->Set_Step(torch::cat({adam_param->Get_Step(), torch::zeros_like(extension_tensor, options)}, 0));
+    adam_param->Set_Step(torch::cat({adam_param->Get_Step(), torch::zeros({extension_tensor.size(0), 1}, options)}, 0));
     old_tensor = torch::cat({old_tensor, extension_tensor}, 0);
 }
 
@@ -203,6 +203,7 @@ void GaussianModel::densify_and_split(torch::Tensor& grads, float grad_threshold
     torch::Tensor new_features_rest = _features_rest.index_select(0, indices).repeat({N, 1, 1});
     torch::Tensor new_opacity = _opacity.index_select(0, indices).repeat({N, 1});
 
+    std::cout << "Densifying and split " << torch::sum(selected_pts_mask).item<int>() << " points\n";
     densification_postfix(new_xyz, new_features_dc, new_features_rest, new_scaling, new_rotation, new_opacity);
 
     torch::Tensor prune_filter = torch::cat({selected_pts_mask.squeeze(-1), torch::zeros({N * selected_pts_mask.sum().item<int>()}).to(torch::kBool).to(torch::kCUDA)});
@@ -228,6 +229,7 @@ void GaussianModel::densify_and_clone(torch::Tensor& grads, float grad_threshold
     torch::Tensor new_scaling = _scaling.index_select(0, indices);
     torch::Tensor new_rotation = _rotation.index_select(0, indices);
 
+    std::cout << "\nDensifying and clone " << torch::sum(selected_pts_mask).item<int>() << " points\n";
     densification_postfix(new_xyz, new_features_dc, new_features_rest, new_scaling, new_rotation, new_opacity);
 }
 
