@@ -87,75 +87,6 @@ namespace gs {
             float tanfovy_val = tanfovy.item<float>();
             float scale_modifier_val = scale_modifier.item<float>();
             int sh_degree_val = sh_degree.item<int>();
-
-            // TODO: should it be this way? Bug?
-            camera_center = camera_center.contiguous();
-
-            auto [num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer] = RasterizeGaussiansCUDA(
-                bg,
-                means3D,
-                colors_precomp,
-                opacities,
-                scales,
-                rotations,
-                scale_modifier_val,
-                cov3Ds_precomp,
-                viewmatrix,
-                projmatrix,
-                tanfovx_val,
-                tanfovy_val,
-                image_height_val,
-                image_width_val,
-                sh,
-                sh_degree_val,
-                camera_center,
-                false,
-                false);
-
-            torch::Tensor n_rendered = torch::tensor({}, torch::dtype(torch::kInt32));
-            torch::load(n_rendered, "out_forward_num_rendered.pt");
-            if (n_rendered.item<int>() != num_rendered) {
-                std::cout << "num_rendered: " << num_rendered << " and tmp.item<int>(): " << n_rendered.item<int>() << " are NOT equal!" << std::endl;
-            } else {
-                std::cout << "num_rendered and tmp.item<int> are equal!" << std::endl;
-            }
-            torch::Tensor col = torch::tensor({}, torch::dtype(torch::kFloat));
-            torch::load(col, "out_forward_color.pt");
-            if (torch::equal(col, color)) {
-                std::cout << "col and color are equal!" << std::endl;
-            } else {
-                std::cout << "col and color are NOT equal!" << std::endl;
-            }
-            torch::Tensor r = torch::tensor({}, torch::dtype(torch::kFloat));
-            torch::load(r, "out_forward_radii.pt");
-            if (torch::equal(r, radii)) {
-                std::cout << "r and radii are equal!" << std::endl;
-            } else {
-                std::cout << "r and radii are NOT equal!" << std::endl;
-            }
-            torch::Tensor geo_buf = torch::tensor({}, torch::dtype(torch::kByte));
-            torch::load(geo_buf, "out_forward_geomBuffer.pt");
-            if (torch::equal(geo_buf, geomBuffer)) {
-                std::cout << "geo_buf and geomBuffer are equal!" << std::endl;
-            } else {
-                std::cout << "geo_buf and geomBuffer are NOT equal!" << std::endl;
-            }
-
-            torch::Tensor bin_buf = torch::tensor({}, torch::dtype(torch::kByte));
-            torch::load(bin_buf, "out_forward_binningBuffer.pt");
-            if (torch::equal(bin_buf, binningBuffer)) {
-                std::cout << "bin_buf and binningBuffer are equal!" << std::endl;
-            } else {
-                std::cout << "bin_buf and binningBuffer are NOT equal!" << std::endl;
-            }
-            torch::Tensor img_buf = torch::tensor({}, torch::dtype(torch::kByte));
-            torch::load(img_buf, "out_forward_imgBuffer.pt");
-            if (torch::equal(img_buf, imgBuffer)) {
-                std::cout << "img_buf and imgBuffer are equal!" << std::endl;
-            } else {
-                std::cout << "img_buf and imgBuffer are NOT equal!" << std::endl;
-            }
-
             torch::Tensor bg_fwd, means3D_fwd, colors_precomp_fwd, opacities_fwd, scales_fwd, rotations_fwd, cov3Ds_precomp_fwd, viewmatrix_fwd, projmatrix_fwd, sh_fwd, camera_center_fwd;
             float scale_modifier_val_fwd, tanfovx_val_fwd, tanfovy_val_fwd;
             int image_height_val_fwd, image_width_val_fwd, sh_degree_val_fwd;
@@ -286,6 +217,161 @@ namespace gs {
                 std::cout << "camera_center_fwd and camera_center are equal!" << std::endl;
             }
 
+            // TODO: should it be this way? Bug?
+            camera_center = camera_center.contiguous();
+
+            auto [num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer] = RasterizeGaussiansCUDA(
+                bg,
+                means3D,
+                colors_precomp,
+                opacities,
+                scales,
+                rotations,
+                scale_modifier_val,
+                cov3Ds_precomp,
+                viewmatrix,
+                projmatrix,
+                tanfovx_val,
+                tanfovy_val,
+                image_height_val,
+                image_width_val,
+                sh,
+                sh_degree_val,
+                camera_center,
+                false,
+                false);
+
+            auto [num_rendered1, color1, radii1, geomBuffer1, binningBuffer1, imgBuffer1] = RasterizeGaussiansCUDA(
+                bg,
+                means3D,
+                colors_precomp,
+                opacities,
+                scales,
+                rotations,
+                scale_modifier_val,
+                cov3Ds_precomp,
+                viewmatrix,
+                projmatrix,
+                tanfovx_val,
+                tanfovy_val,
+                image_height_val,
+                image_width_val,
+                sh,
+                sh_degree_val,
+                camera_center,
+                false,
+                false);
+
+            std::cout << "====================================================================" << std::endl;
+            if (num_rendered == num_rendered1) {
+                std::cout << "num_rendered and num_rendered1 are equal!" << std::endl;
+            } else {
+                std::cout << "num_rendered and num_rendered1 are NOT equal!" << std::endl;
+            }
+
+            if (torch::equal(color1, color)) {
+                std::cout << "color1 and color are equal!" << std::endl;
+            } else {
+                std::cout << "color1 and color are NOT equal!" << std::endl;
+            }
+            if (torch::equal(radii1, radii)) {
+                std::cout << "radii1 and radii are equal!" << std::endl;
+            } else {
+                std::cout << "radii1 and radii are NOT equal!" << std::endl;
+            }
+
+            if (torch::equal(geomBuffer1, geomBuffer)) {
+                std::cout << "geomBuffer1 and geomBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "geomBuffer1 and geomBuffer are NOT equal!" << std::endl;
+            }
+
+            if (torch::equal(binningBuffer1, binningBuffer)) {
+                std::cout << "binningBuffer1 and binningBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "binningBuffer1 and binningBuffer are NOT equal!" << std::endl;
+            }
+
+            if (torch::equal(imgBuffer1, imgBuffer)) {
+                std::cout << "imgBuffer1 and imgBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "imgBuffer1 and imgBuffer are NOT equal!" << std::endl;
+            }
+            std::cout << "====================================================================" << std::endl;
+
+            torch::Tensor n_rendered = torch::tensor({}, torch::dtype(torch::kInt32));
+            torch::load(n_rendered, "out_forward_num_rendered.pt");
+            if (n_rendered.item<int>() != num_rendered) {
+                std::cout << "num_rendered: " << num_rendered << " and tmp.item<int>(): " << n_rendered.item<int>() << " are NOT equal!" << std::endl;
+            } else {
+                std::cout << "num_rendered and tmp.item<int> are equal!" << std::endl;
+            }
+            torch::Tensor col = torch::tensor({}, torch::dtype(torch::kFloat));
+            torch::load(col, "out_forward_color.pt");
+            if (torch::equal(col, color)) {
+                std::cout << "col and color are equal!" << std::endl;
+            } else {
+                std::cout << "col and color are NOT equal!" << std::endl;
+            }
+            torch::Tensor r = torch::tensor({}, torch::dtype(torch::kFloat));
+            torch::load(r, "out_forward_radii.pt");
+            if (torch::equal(r, radii)) {
+                std::cout << "r and radii are equal!" << std::endl;
+            } else {
+                std::cout << "r and radii are NOT equal!" << std::endl;
+            }
+            torch::Tensor geo_buf = torch::tensor({}, torch::dtype(torch::kByte));
+            torch::load(geo_buf, "out_forward_geomBuffer.pt");
+            if (torch::equal(geo_buf, geomBuffer)) {
+                std::cout << "geo_buf and geomBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "geo_buf and geomBuffer are NOT equal!" << std::endl;
+            }
+
+            torch::Tensor bin_buf = torch::tensor({}, torch::dtype(torch::kByte));
+            torch::load(bin_buf, "out_forward_binningBuffer.pt");
+            if (torch::equal(bin_buf, binningBuffer)) {
+                std::cout << "bin_buf and binningBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "bin_buf and binningBuffer are NOT equal!" << std::endl;
+            }
+            torch::Tensor img_buf = torch::tensor({}, torch::dtype(torch::kByte));
+            torch::load(img_buf, "out_forward_imgBuffer.pt");
+            if (torch::equal(img_buf, imgBuffer)) {
+                std::cout << "img_buf and imgBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "img_buf and imgBuffer are NOT equal!" << std::endl;
+            }
+
+            // Compute absolute differences
+            torch::Tensor diff = torch::abs(img_buf - imgBuffer);
+
+            // Define a tolerance
+            float tol = 1e-10;
+
+            // Find elements that differ more than the tolerance
+            torch::Tensor large_diff_mask = diff > tol;
+
+            // Count the number of large differences
+            int64_t num_large_diff = torch::sum(large_diff_mask).item<int64_t>();
+
+            // Print some of the differences
+            if (num_large_diff > 0) {
+                std::cout << "Number of large differences: " << num_large_diff << std::endl;
+
+                // Extract and print the indices and values of the first few large differences
+                torch::Tensor large_diff_indices = torch::nonzero(large_diff_mask);
+                torch::Tensor large_diff_values = torch::masked_select(diff, large_diff_mask);
+
+                int max_to_print = 10; // Change this to print more or fewer values
+                for (int i = 0; i < std::min(max_to_print, static_cast<int>(num_large_diff)); ++i) {
+                    int64_t index = large_diff_indices[i].item<int64_t>();
+                    float value = large_diff_values[i].item<float>();
+                    std::cout << "Index: " << index << ", Difference: " << value << std::endl;
+                }
+            } else {
+                std::cout << "All differences are within tolerance." << std::endl;
+            }
             cudaDeviceSynchronize();
             saveForBackward.colors_precomp = colors_precomp;
             saveForBackward.means3D = means3D;

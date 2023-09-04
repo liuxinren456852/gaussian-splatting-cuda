@@ -266,7 +266,6 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
     auto block = cg::this_thread_block();
     uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
     uint2 pix_min = {block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y};
-    uint2 pix_max = {min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y, H)};
     uint2 pix = {pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y};
     uint32_t pix_id = W * pix.y + pix.x;
     float2 pixf = {(float)pix.x, (float)pix.y};
@@ -300,6 +299,7 @@ __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
             break;
 
         // Collectively fetch per-Gaussian data from global to shared
+        block.sync();
         int progress = i * BLOCK_SIZE + block.thread_rank();
         if (range.x + progress < range.y) {
             int coll_id = point_list[range.x + progress];

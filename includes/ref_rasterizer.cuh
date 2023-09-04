@@ -87,6 +87,64 @@ namespace ref {
                 false,
                 false);
 
+            auto [num_rendered1, color1, radii1, geomBuffer1, binningBuffer1, imgBuffer1] = RasterizeGaussiansCUDA(
+                bg,
+                means3D,
+                colors_precomp,
+                opacities,
+                scales,
+                rotations,
+                scale_modifier_val,
+                cov3Ds_precomp,
+                viewmatrix,
+                projmatrix,
+                tanfovx_val,
+                tanfovy_val,
+                image_height_val,
+                image_width_val,
+                sh,
+                sh_degree_val,
+                camera_center,
+                false,
+                false);
+
+            std::cout << "============torch::autograd::tensor_list forward(torch::autograd::AutogradContext* ctx===========" << std::endl;
+            if (num_rendered == num_rendered1) {
+                std::cout << "num_rendered and num_rendered1 are equal!" << std::endl;
+            } else {
+                std::cout << "num_rendered and num_rendered1 are NOT equal!" << std::endl;
+            }
+
+            if (torch::equal(color1, color)) {
+                std::cout << "color1 and color are equal!" << std::endl;
+            } else {
+                std::cout << "color1 and color are NOT equal!" << std::endl;
+            }
+            if (torch::equal(radii1, radii)) {
+                std::cout << "radii1 and radii are equal!" << std::endl;
+            } else {
+                std::cout << "radii1 and radii are NOT equal!" << std::endl;
+            }
+
+            if (torch::equal(geomBuffer1, geomBuffer)) {
+                std::cout << "geomBuffer1 and geomBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "geomBuffer1 and geomBuffer are NOT equal!" << std::endl;
+            }
+
+            if (torch::equal(binningBuffer1, binningBuffer)) {
+                std::cout << "binningBuffer1 and binningBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "binningBuffer1 and binningBuffer are NOT equal!" << std::endl;
+            }
+
+            if (torch::equal(imgBuffer1, imgBuffer)) {
+                std::cout << "imgBuffer1 and imgBuffer are equal!" << std::endl;
+            } else {
+                std::cout << "imgBuffer1 and imgBuffer are NOT equal!" << std::endl;
+            }
+            std::cout << "============torch::autograd::tensor_list forward(torch::autograd::AutogradContext* ctx===========" << std::endl;
+
             torch::save(bg, "forward_bg.pt");
             torch::save(means3D, "forward_means3D.pt");
             torch::save(colors_precomp, "forward_colors_precomp.pt");
