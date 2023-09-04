@@ -42,7 +42,7 @@ std::vector<int> get_random_indices(int max_index) {
     std::vector<int> indices(max_index);
     std::iota(indices.begin(), indices.end(), 0);
     // Shuffle the vector
-    //    std::shuffle(indices.begin(), indices.end(), std::default_random_engine());
+    std::shuffle(indices.begin(), indices.end(), std::default_random_engine());
     return indices;
 }
 
@@ -229,7 +229,7 @@ int main(int argc, char* argv[]) {
             avg_converging_rate = loss_monitor.Update(loss.item<float>());
         }
         loss_add += loss.item<float>();
-        std::cout << "Iter: ," << iter << " Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>() << std::endl;
+        std::cout << "Iter: " << iter << ", Splats: " << grad_means2D.size(0) << ", Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>() << std::endl;
 
         {
             auto visible_max_radii = gaussians._max_radii2D.masked_select(visibility_filter);

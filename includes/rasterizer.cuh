@@ -143,17 +143,7 @@ namespace gs {
         }
 
         static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> Backward(SaveForBackward saveForBackward, torch::Tensor g_color) {
-            auto num_rendered = saveForBackward.num_rendered;
-            auto colors_precomp = saveForBackward.colors_precomp;
-            auto means3D = saveForBackward.means3D;
-            auto scales = saveForBackward.scales;
-            auto rotations = saveForBackward.rotations;
-            auto cov3Ds_precomp = saveForBackward.cov3Ds_precomp;
-            auto radii = saveForBackward.radii;
-            auto sh = saveForBackward.sh;
             auto geomBuffer = saveForBackward.geomBuffer;
-            auto binningBuffer = saveForBackward.binningBuffer;
-            auto imgBuffer = saveForBackward.imgBuffer;
 
 #ifdef WRITE_TEST_DATA
             auto grad_out_color_copy = grad_out_color.clone();
@@ -180,25 +170,25 @@ namespace gs {
 
             auto [grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations] = RasterizeGaussiansBackwardCUDA(
                 saveForBackward.bg,
-                means3D,
-                radii,
-                colors_precomp,
-                scales,
-                rotations,
+                saveForBackward.means3D,
+                saveForBackward.radii,
+                saveForBackward.colors_precomp,
+                saveForBackward.scales,
+                saveForBackward.rotations,
                 saveForBackward.scale_modifier,
-                cov3Ds_precomp,
+                saveForBackward.cov3Ds_precomp,
                 saveForBackward.viewmatrix,
                 saveForBackward.projmatrix,
                 saveForBackward.tanfovx,
                 saveForBackward.tanfovy,
                 g_color,
-                sh,
+                saveForBackward.sh,
                 saveForBackward.sh_degree,
                 saveForBackward.camera_center,
-                geomBuffer,
-                num_rendered,
-                binningBuffer,
-                imgBuffer,
+                saveForBackward.geomBuffer,
+                saveForBackward.num_rendered,
+                saveForBackward.binningBuffer,
+                saveForBackward.imgBuffer,
                 false);
 
 #ifdef WRITE_TEST_DATA
@@ -248,7 +238,6 @@ namespace gs {
     public:
         void SetRasterizerInput(RasterizerInput raster_settings) { raster_settings_ = raster_settings; }
         torch::Tensor mark_visible(torch::Tensor positions) {
-            torch::NoGradGuard no_grad;
             auto visible = markVisible(
                 positions,
                 raster_settings_.viewmatrix,
