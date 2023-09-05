@@ -276,10 +276,13 @@ namespace gs {
                 // Compute step size considering bias correction
                 const float step_size = -lr_t / bias_correction1;
 
+                const float denom_x = sqrtf(avg_sq.x) / bias_correction2_sqrt + epsilon;
+                const float denom_y = sqrtf(avg_sq.y) / bias_correction2_sqrt + epsilon;
+                const float denom_z = sqrtf(avg_sq.z) / bias_correction2_sqrt + epsilon;
                 // update the weights/biases
-                param.x = param.x + step_size * avg.x / (sqrtf(avg_sq.x) / bias_correction2_sqrt + epsilon);
-                param.y = param.y + step_size * avg.y / (sqrtf(avg_sq.y) / bias_correction2_sqrt + epsilon);
-                param.z = param.z + step_size * avg.z / (sqrtf(avg_sq.z) / bias_correction2_sqrt + epsilon);
+                param.x = param.x + step_size * avg.x / denom_x;
+                param.y = param.y + step_size * avg.y / denom_y;
+                param.z = param.z + step_size * avg.z / denom_z;
 
                 params[idx] = param;
                 d_avg[idx] = avg;
@@ -328,11 +331,15 @@ namespace gs {
                 // Compute step size considering bias correction
                 float step_size = -lr_t / bias_correction1;
 
+                const float denom_x = sqrtf(avg_sq.x) / bias_correction2_sqrt + epsilon;
+                const float denom_y = sqrtf(avg_sq.y) / bias_correction2_sqrt + epsilon;
+                const float denom_z = sqrtf(avg_sq.z) / bias_correction2_sqrt + epsilon;
+                const float denom_w = sqrtf(avg_sq.w) / bias_correction2_sqrt + epsilon;
                 // update the weights/biases
-                param.x = param.x + step_size * avg.x / (sqrtf(avg_sq.x) / bias_correction2_sqrt + epsilon);
-                param.y = param.y + step_size * avg.y / (sqrtf(avg_sq.y) / bias_correction2_sqrt + epsilon);
-                param.z = param.z + step_size * avg.z / (sqrtf(avg_sq.z) / bias_correction2_sqrt + epsilon);
-                param.w = param.w + step_size * avg.w / (sqrtf(avg_sq.w) / bias_correction2_sqrt + epsilon);
+                param.x = param.x + step_size * avg.x / denom_x;
+                param.y = param.y + step_size * avg.y / denom_y;
+                param.z = param.z + step_size * avg.z / denom_z;
+                param.w = param.w + step_size * avg.w / denom_w;
                 params[idx] = param;
                 d_avg[idx] = avg;
                 d_avg_sq[idx] = avg_sq;
@@ -371,10 +378,11 @@ namespace gs {
                 // compute the new moving average of the squared gradient
                 avg_sq = beta2 * avg_sq + (1.f - beta2) * param_grad * param_grad;
 
-                float step_size = -lr_t / bias_correction1;
+                const float step_size = -lr_t / bias_correction1;
 
                 // update the weights/biases
-                param = param + step_size * avg / (sqrtf(avg_sq) / bias_correction2_sqrt + epsilon);
+                const float denom = sqrtf(avg_sq) / bias_correction2_sqrt + epsilon;
+                param = param + step_size * avg / denom;
 
                 params[idx] = param;
                 d_avg[idx] = avg;
@@ -421,12 +429,15 @@ namespace gs {
                     avg_sq.z = beta2 * avg_sq.z + (1.f - beta2) * param_grad.z * param_grad.z;
 
                     // Compute step size considering bias correction
-                    float step_size = -lr_t / bias_correction1;
+                    const float step_size = -lr_t / bias_correction1;
+                    const float denom_x = sqrtf(avg_sq.x) / bias_correction2_sqrt + epsilon;
+                    const float denom_y = sqrtf(avg_sq.y) / bias_correction2_sqrt + epsilon;
+                    const float denom_z = sqrtf(avg_sq.z) / bias_correction2_sqrt + epsilon;
 
                     // update the weights/biases
-                    param.x = param.x + step_size * avg.x / (sqrtf(avg_sq.x) / bias_correction2_sqrt + epsilon);
-                    param.y = param.y + step_size * avg.y / (sqrtf(avg_sq.y) / bias_correction2_sqrt + epsilon);
-                    param.z = param.z + step_size * avg.z / (sqrtf(avg_sq.z) / bias_correction2_sqrt + epsilon);
+                    param.x = param.x + step_size * avg.x / denom_x;
+                    param.y = param.y + step_size * avg.y / denom_y;
+                    param.z = param.z + step_size * avg.z / denom_z;
                     params[current_index] = param;
                     d_avg[current_index] = avg;
                     d_avg_sq[current_index] = avg_sq;

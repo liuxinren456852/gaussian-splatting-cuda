@@ -69,6 +69,7 @@ namespace gs {
             void Set_Gradient(torch::Tensor d_param_grad);
             void Set_Param(torch::Tensor d_param);
             torch::Tensor Get_Param() { return _d_params; }
+            torch::Tensor Get_Gradient() { return _d_params_grad; }
 
         private:
             torch::Tensor _d_params;
@@ -105,6 +106,5 @@ namespace gs {
         private:
             std::unordered_map<ParamType, std::shared_ptr<AdamParameterBase>> _params;
         };
-
     } // namespace optim
 } // namespace gs

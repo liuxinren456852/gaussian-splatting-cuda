@@ -53,7 +53,7 @@ namespace gs {
             const auto l_p = (2.f * mu1_mu2 + C1) / (mu1_sq + mu2_sq + C1);
             const auto cs_p = (2.f * sigma12 + C2) / (sigma1_sq + sigma2_sq + C2);
 
-            const auto lp_x = 2.f * (mu2 - mu1 * l_p) / (mu1_sq + mu2_sq + C1);
+            const auto lp_x = 2.f * ((mu2 - mu1 * l_p) / (mu1_sq + mu2_sq + C1));
             const auto cs_x = 2.f / (sigma1_sq + sigma2_sq + C2);
             const auto lp_x_q_C_s_p = torch::nn::functional::conv2d(lp_x * cs_x, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
 
@@ -64,7 +64,7 @@ namespace gs {
             const auto c4 = torch::nn::functional::conv2d(new_p * cs_p * mu1, window, torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
             auto dL_ssim_dimg1 = (lp_x_q_C_s_p + c1 + c2 + c3 + c4) / static_cast<float>(N_sq);
 
-            return {ssim_map.mean(), dL_ssim_dimg1.to(dtype(torch::kInt32).device(torch::kCUDA))};
+            return {ssim_map.mean(), dL_ssim_dimg1.to(dtype(torch::kFloat).device(torch::kCUDA))};
         }
     } // namespace loss
 } // namespace gs

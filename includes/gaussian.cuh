@@ -50,6 +50,12 @@ namespace gs {
                           const torch::Tensor& grad_opacities,
                           const torch::Tensor& grad_scales,
                           const torch::Tensor& grad_rotations);
+        void Update_Grads(const torch::Tensor& grad_means3D,
+                          const torch::Tensor& grad_feature_dc,   // needs to be splitted or rather vice versa
+                          const torch::Tensor& grad_feature_rest, // needs to be splitted or rather vice versa
+                          const torch::Tensor& grad_opacities,
+                          const torch::Tensor& grad_scales,
+                          const torch::Tensor& grad_rotations);
         void Set_Optimizer_Params();
         void Update_Params();
 

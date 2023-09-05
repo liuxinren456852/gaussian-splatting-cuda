@@ -330,4 +330,32 @@ namespace gs {
         _rotation = _optimizer->GetAdamParameter(gs::optim::ParamType::Rotation)->Get_Param();
         _opacity = _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Get_Param();
     }
+
+    void GaussianModel::Update_Grads(const torch::Tensor& grad_means3D,
+                                     const torch::Tensor& grad_features_dc,
+                                     const torch::Tensor& grad_features_rest,
+                                     const torch::Tensor& grad_opacities,
+                                     const torch::Tensor& grad_scales,
+                                     const torch::Tensor& grad_rotations) {
+
+        ts::print_debug_info(grad_means3D, "ref_grad_means3D");
+        ts::print_debug_info(_optimizer->GetAdamParameter(gs::optim::ParamType::Pos)->Get_Gradient(), "grad_means3D");
+        ts::print_debug_info(grad_features_dc, "ref_grad_features_dc");
+        ts::print_debug_info(_optimizer->GetAdamParameter(gs::optim::ParamType::Features_dc)->Get_Gradient(), "grad_features_dc");
+        ts::print_debug_info(grad_features_rest, "ref_grad_features_rest");
+        ts::print_debug_info(_optimizer->GetAdamParameter(gs::optim::ParamType::Features_rest)->Get_Gradient(), "grad_features_rest");
+        ts::print_debug_info(grad_opacities, "ref_grad_opacities");
+        ts::print_debug_info(_optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Get_Gradient(), "grad_opacities");
+        ts::print_debug_info(grad_scales, "ref_grad_scales");
+        ts::print_debug_info(_optimizer->GetAdamParameter(gs::optim::ParamType::Scaling)->Get_Gradient(), "grad_scales");
+        ts::print_debug_info(grad_rotations, "ref_grad_rotations");
+        ts::print_debug_info(_optimizer->GetAdamParameter(gs::optim::ParamType::Rotation)->Get_Gradient(), "grad_rotations");
+
+        _optimizer->GetAdamParameter(gs::optim::ParamType::Pos)->Set_Gradient(grad_means3D);
+        _optimizer->GetAdamParameter(gs::optim::ParamType::Features_dc)->Set_Gradient(grad_features_dc);
+        _optimizer->GetAdamParameter(gs::optim::ParamType::Features_rest)->Set_Gradient(grad_features_rest);
+        _optimizer->GetAdamParameter(gs::optim::ParamType::Scaling)->Set_Gradient(grad_scales);
+        _optimizer->GetAdamParameter(gs::optim::ParamType::Rotation)->Set_Gradient(grad_rotations);
+        _optimizer->GetAdamParameter(gs::optim::ParamType::Opacity)->Set_Gradient(grad_opacities);
+    }
 } // namespace gs
