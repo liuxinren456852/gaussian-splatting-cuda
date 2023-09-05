@@ -4,6 +4,7 @@
 
 #include "debug_utils.cuh"
 #include "rasterize_points.cuh"
+#include "rasterizer_impl.h"
 #include "serialization.h"
 
 #define WRITE_TEST_DATA
@@ -107,6 +108,37 @@ namespace ref {
                 camera_center,
                 false,
                 false);
+
+            imgBuffer = imgBuffer.to(torch::kCPU);
+            imgBuffer1 = imgBuffer1.to(torch::kCPU);
+            char* imgBufPtr = reinterpret_cast<char*>(imgBuffer.contiguous().data_ptr());
+            char* imgBufPtr1 = reinterpret_cast<char*>(imgBuffer1.contiguous().data_ptr());
+            auto imgState = CudaRasterizer::ImageState::fromChunk(imgBufPtr, image_height_val * image_width_val);
+            auto imgState1 = CudaRasterizer::ImageState::fromChunk(imgBufPtr1, image_height_val * image_width_val);
+
+            int accu_alpha_diffs = 0;
+            int n_contrib_diffs = 0;
+            int ranges_diffs = 0;
+
+            int pixel_count = image_height_val * image_width_val;
+            for (int i = 0; i < pixel_count; ++i) {
+                if (imgState.accum_alpha[i] != imgState1.accum_alpha[i]) {
+                    ++accu_alpha_diffs;
+                }
+                if (imgState.n_contrib[i] != imgState1.n_contrib[i]) {
+                    ++n_contrib_diffs;
+                }
+                if (imgState.ranges[i].x != imgState1.ranges[i].x || imgState.ranges[i].y != imgState1.ranges[i].y) {
+                    ++ranges_diffs;
+                }
+            }
+
+            imgBuffer = imgBuffer.to(torch::kCUDA);
+            imgBuffer1 = imgBuffer1.to(torch::kCUDA);
+
+            std::cout << "accu_alpha_diffs: " << accu_alpha_diffs << std::endl;
+            std::cout << "n_contrib_diffs: " << n_contrib_diffs << std::endl;
+            std::cout << "ranges_diffs: " << ranges_diffs << std::endl;
 
             std::cout << "============torch::autograd::tensor_list forward(torch::autograd::AutogradContext* ctx===========" << std::endl;
             if (num_rendered == num_rendered1) {

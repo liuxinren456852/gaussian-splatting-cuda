@@ -119,8 +119,8 @@ __global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* rang
     else {
         uint32_t prevtile = point_list_keys[idx - 1] >> 32;
         if (currtile != prevtile) {
-            ranges[prevtile].y = idx;
-            ranges[currtile].x = idx;
+            ranges[prevtile].y = idx; // end
+            ranges[currtile].x = idx; // start
         }
     }
     if (idx == L - 1)
@@ -293,6 +293,8 @@ int CudaRasterizer::Rasterizer::forward(
                debug)
 
     CHECK_CUDA(cudaMemset(imgState.ranges, 0, tile_grid.x * tile_grid.y * sizeof(uint2)), debug);
+    CHECK_CUDA(cudaMemset(imgState.n_contrib, 0, tile_grid.x * tile_grid.y * sizeof(uint32_t)), debug);
+    CHECK_CUDA(cudaMemset(imgState.accum_alpha, 0.f, tile_grid.x * tile_grid.y * sizeof(float)), debug);
 
     // Identify start and end of per-tile workloads in sorted list
     if (num_rendered > 0)
