@@ -190,21 +190,24 @@ int main(int argc, char* argv[]) {
 
         // Render
         auto [ref_image, ref_viewspace_points, ref_visibility_filter, ref_radii] = ref::render(ref_cam, ref_gaussians, ref_background);
-        //        ref_image.set_requires_grad(true);
-        //        ref_image.retain_grad();
+        ref_image.set_requires_grad(true);
+        ref_image.retain_grad();
         //        ref_gt_image.set_requires_grad(true);
         //        ref_gt_image.retain_grad();
         //        ref_gaussians._optimizer->zero_grad();
-        auto ref_L1l = ref::l1_loss(ref_image, ref_gt_image);
-        auto ref_ssim_loss = ref::ssim(ref_image, ref_gt_image, ref_conv_window, window_size, channel);
+        auto [ref_L1l, ref_dL_l1_loss] = ref::loss::l1_loss(ref_image, ref_gt_image);
+        auto [ref_ssim_loss, ref_dL_ssim_dimg1] = ref::loss::ssim(ref_image, ref_gt_image, ref_conv_window, window_size, channel);
         auto ref_loss = (1.f - optimParams.lambda_dssim) * ref_L1l + optimParams.lambda_dssim * (1.f - ref_ssim_loss);
+        const auto ref_dloss_dssim = -optimParams.lambda_dssim;
+        const auto ref_dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
+        const auto ref_dloss_dimage = ref_dloss_dLl1 * ref_dL_l1_loss + ref_dloss_dssim * ref_dL_ssim_dimg1;
+        torch::save(ref_dloss_dimage, "ref_image_loss.pt");
         ref_loss.backward();
 
-        if (torch::all(torch::eq(ref_gt_image, 0.0)).item<bool>()) {
-            std::cout << "All elements are zero." << std::endl;
-        } else {
-            std::cout << "Not all elements are zero." << std::endl;
-        }
+        //        auto diff = torch::abs(ref_dloss_dimage - ref_image.grad());
+        //        auto max = torch::max(diff);
+        //        std::cout << "Diff ref_dloss_dimage max: " << max.item<float>() <<  std::endl;
+
         cudaDeviceSynchronize();
         // Loss Computations
         //        torch::Tensor grad;
@@ -222,6 +225,13 @@ int main(int argc, char* argv[]) {
         const auto dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
         const auto dloss_dimage = dloss_dLl1 * dL_l1_loss + dloss_dssim * dL_ssim_dimg1;
         cudaDeviceSynchronize();
+
+        //        if (!torch::allclose(dloss_dimage, ref_image.grad(), 1e-5, 1e-5)) {
+        //            std::cout << "Diff dloss_dimage" << std::endl;
+        //            auto diff = torch::abs(dloss_dimage - ref_image.grad());
+        //            auto max = torch::max(diff);
+        //            std::cout << "Diff dloss_dimage Max: " << max <<  std::endl;
+        //        }
         auto [grad_means3D, grad_means2D, grad_sh, grad_color_precomp, grad_opacities, grad_scales, grad_rotations, grad_cov3Ds_precomp] = gs::_RasterizeGaussians::Backward(saveForBackwars, dloss_dimage);
         gaussians.Update_Grads(grad_means3D, grad_sh, grad_opacities, grad_scales, grad_rotations);
         //        {

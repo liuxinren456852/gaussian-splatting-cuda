@@ -219,8 +219,10 @@ namespace ref {
         }
 
         static torch::autograd::tensor_list backward(torch::autograd::AutogradContext* ctx, torch::autograd::tensor_list grad_outputs) {
+            torch::Tensor image_loss;
+            torch::load(image_loss, "ref_image_loss.pt");
             auto grad_out_color = grad_outputs[0];
-            torch::save(grad_out_color, "grad_out_color.pt");
+            //            torch::save(grad_out_color, "grad_out_color.pt");
 
             auto num_rendered = ctx->saved_data["num_rendered"].to<int>();
             auto saved = ctx->get_saved_variables();
@@ -293,7 +295,7 @@ namespace ref {
                 ctx->saved_data["projmatrix"].to<torch::Tensor>(),
                 ctx->saved_data["tanfovx"].to<float>(),
                 ctx->saved_data["tanfovy"].to<float>(),
-                grad_out_color,
+                image_loss,
                 sh,
                 ctx->saved_data["sh_degree"].to<int>(),
                 ctx->saved_data["camera_center"].to<torch::Tensor>(),
