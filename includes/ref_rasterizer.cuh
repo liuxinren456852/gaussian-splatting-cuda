@@ -88,119 +88,119 @@ namespace ref {
                 false,
                 false);
 
-            auto [num_rendered1, color1, radii1, geomBuffer1, binningBuffer1, imgBuffer1] = RasterizeGaussiansCUDA(
-                bg,
-                means3D,
-                colors_precomp,
-                opacities,
-                scales,
-                rotations,
-                scale_modifier_val,
-                cov3Ds_precomp,
-                viewmatrix,
-                projmatrix,
-                tanfovx_val,
-                tanfovy_val,
-                image_height_val,
-                image_width_val,
-                sh,
-                sh_degree_val,
-                camera_center,
-                false,
-                false);
+            //            auto [num_rendered1, color1, radii1, geomBuffer1, binningBuffer1, imgBuffer1] = RasterizeGaussiansCUDA(
+            //                bg,
+            //                means3D,
+            //                colors_precomp,
+            //                opacities,
+            //                scales,
+            //                rotations,
+            //                scale_modifier_val,
+            //                cov3Ds_precomp,
+            //                viewmatrix,
+            //                projmatrix,
+            //                tanfovx_val,
+            //                tanfovy_val,
+            //                image_height_val,
+            //                image_width_val,
+            //                sh,
+            //                sh_degree_val,
+            //                camera_center,
+            //                false,
+            //                false);
 
-            imgBuffer = imgBuffer.to(torch::kCPU);
-            imgBuffer1 = imgBuffer1.to(torch::kCPU);
-            char* imgBufPtr = reinterpret_cast<char*>(imgBuffer.contiguous().data_ptr());
-            char* imgBufPtr1 = reinterpret_cast<char*>(imgBuffer1.contiguous().data_ptr());
-            auto imgState = CudaRasterizer::ImageState::fromChunk(imgBufPtr, image_height_val * image_width_val);
-            auto imgState1 = CudaRasterizer::ImageState::fromChunk(imgBufPtr1, image_height_val * image_width_val);
-
-            int accu_alpha_diffs = 0;
-            int n_contrib_diffs = 0;
-            int ranges_diffs = 0;
-
-            int pixel_count = image_height_val * image_width_val;
-            for (int i = 0; i < pixel_count; ++i) {
-                if (imgState.accum_alpha[i] != imgState1.accum_alpha[i]) {
-                    ++accu_alpha_diffs;
-                }
-                if (imgState.n_contrib[i] != imgState1.n_contrib[i]) {
-                    ++n_contrib_diffs;
-                }
-                if (imgState.ranges[i].x != imgState1.ranges[i].x || imgState.ranges[i].y != imgState1.ranges[i].y) {
-                    ++ranges_diffs;
-                }
-            }
-
-            imgBuffer = imgBuffer.to(torch::kCUDA);
-            imgBuffer1 = imgBuffer1.to(torch::kCUDA);
-
-            std::cout << "accu_alpha_diffs: " << accu_alpha_diffs << std::endl;
-            std::cout << "n_contrib_diffs: " << n_contrib_diffs << std::endl;
-            std::cout << "ranges_diffs: " << ranges_diffs << std::endl;
-
-            std::cout << "============torch::autograd::tensor_list forward(torch::autograd::AutogradContext* ctx===========" << std::endl;
-            if (num_rendered == num_rendered1) {
-                std::cout << "num_rendered and num_rendered1 are equal!" << std::endl;
-            } else {
-                std::cout << "num_rendered and num_rendered1 are NOT equal!" << std::endl;
-            }
-
-            if (torch::equal(color1, color)) {
-                std::cout << "color1 and color are equal!" << std::endl;
-            } else {
-                std::cout << "color1 and color are NOT equal!" << std::endl;
-            }
-            if (torch::equal(radii1, radii)) {
-                std::cout << "radii1 and radii are equal!" << std::endl;
-            } else {
-                std::cout << "radii1 and radii are NOT equal!" << std::endl;
-            }
-
-            if (torch::equal(geomBuffer1, geomBuffer)) {
-                std::cout << "geomBuffer1 and geomBuffer are equal!" << std::endl;
-            } else {
-                std::cout << "geomBuffer1 and geomBuffer are NOT equal!" << std::endl;
-            }
-
-            if (torch::equal(binningBuffer1, binningBuffer)) {
-                std::cout << "binningBuffer1 and binningBuffer are equal!" << std::endl;
-            } else {
-                std::cout << "binningBuffer1 and binningBuffer are NOT equal!" << std::endl;
-            }
-
-            if (torch::equal(imgBuffer1, imgBuffer)) {
-                std::cout << "imgBuffer1 and imgBuffer are equal!" << std::endl;
-            } else {
-                std::cout << "imgBuffer1 and imgBuffer are NOT equal!" << std::endl;
-            }
-            std::cout << "============torch::autograd::tensor_list forward(torch::autograd::AutogradContext* ctx===========" << std::endl;
-
-            torch::save(bg, "forward_bg.pt");
-            torch::save(means3D, "forward_means3D.pt");
-            torch::save(colors_precomp, "forward_colors_precomp.pt");
-            torch::save(opacities, "forward_opacities.pt");
-            torch::save(scales, "forward_scales.pt");
-            torch::save(rotations, "forward_rotations.pt");
-            torch::save(scale_modifier, "forward_scale_modifier_val.pt");
-            torch::save(cov3Ds_precomp, "forward_cov3Ds_precomp.pt");
-            torch::save(viewmatrix, "forward_viewmatrix.pt");
-            torch::save(projmatrix, "forward_projmatrix.pt");
-            torch::save(tanfovx, "forward_tanfovx_val.pt");
-            torch::save(tanfovy, "forward_tanfovy_val.pt");
-            torch::save(image_height, "forward_image_height_val.pt");
-            torch::save(image_width, "forward_image_width_val.pt");
-            torch::save(sh, "forward_sh.pt");
-            torch::save(sh_degree, "forward_sh_degree_val.pt");
-            torch::save(camera_center, "forward_camera_center.pt");
-
-            torch::save(torch::tensor(num_rendered, torch::dtype(torch::kInt32)), "out_forward_num_rendered.pt");
-            torch::save(color, "out_forward_color.pt");
-            torch::save(radii, "out_forward_radii.pt");
-            torch::save(geomBuffer, "out_forward_geomBuffer.pt");
-            torch::save(binningBuffer, "out_forward_binningBuffer.pt");
-            torch::save(imgBuffer, "out_forward_imgBuffer.pt");
+            //            imgBuffer = imgBuffer.to(torch::kCPU);
+            //            imgBuffer1 = imgBuffer1.to(torch::kCPU);
+            //            char* imgBufPtr = reinterpret_cast<char*>(imgBuffer.contiguous().data_ptr());
+            //            char* imgBufPtr1 = reinterpret_cast<char*>(imgBuffer1.contiguous().data_ptr());
+            //            auto imgState = CudaRasterizer::ImageState::fromChunk(imgBufPtr, image_height_val * image_width_val);
+            //            auto imgState1 = CudaRasterizer::ImageState::fromChunk(imgBufPtr1, image_height_val * image_width_val);
+            //
+            //            int accu_alpha_diffs = 0;
+            //            int n_contrib_diffs = 0;
+            //            int ranges_diffs = 0;
+            //
+            //            int pixel_count = image_height_val * image_width_val;
+            //            for (int i = 0; i < pixel_count; ++i) {
+            //                if (imgState.accum_alpha[i] != imgState1.accum_alpha[i]) {
+            //                    ++accu_alpha_diffs;
+            //                }
+            //                if (imgState.n_contrib[i] != imgState1.n_contrib[i]) {
+            //                    ++n_contrib_diffs;
+            //                }
+            //                if (imgState.ranges[i].x != imgState1.ranges[i].x || imgState.ranges[i].y != imgState1.ranges[i].y) {
+            //                    ++ranges_diffs;
+            //                }
+            //            }
+            //
+            //            imgBuffer = imgBuffer.to(torch::kCUDA);
+            //            imgBuffer1 = imgBuffer1.to(torch::kCUDA);
+            //
+            //            std::cout << "accu_alpha_diffs: " << accu_alpha_diffs << std::endl;
+            //            std::cout << "n_contrib_diffs: " << n_contrib_diffs << std::endl;
+            //            std::cout << "ranges_diffs: " << ranges_diffs << std::endl;
+            //
+            //            std::cout << "============torch::autograd::tensor_list forward(torch::autograd::AutogradContext* ctx===========" << std::endl;
+            //            if (num_rendered == num_rendered1) {
+            //                std::cout << "num_rendered and num_rendered1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "num_rendered and num_rendered1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(color1, color)) {
+            //                std::cout << "color1 and color are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "color1 and color are NOT equal!" << std::endl;
+            //            }
+            //            if (torch::equal(radii1, radii)) {
+            //                std::cout << "radii1 and radii are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "radii1 and radii are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(geomBuffer1, geomBuffer)) {
+            //                std::cout << "geomBuffer1 and geomBuffer are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "geomBuffer1 and geomBuffer are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(binningBuffer1, binningBuffer)) {
+            //                std::cout << "binningBuffer1 and binningBuffer are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "binningBuffer1 and binningBuffer are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(imgBuffer1, imgBuffer)) {
+            //                std::cout << "imgBuffer1 and imgBuffer are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "imgBuffer1 and imgBuffer are NOT equal!" << std::endl;
+            //            }
+            //            std::cout << "============torch::autograd::tensor_list forward(torch::autograd::AutogradContext* ctx===========" << std::endl;
+            //
+            //            torch::save(bg, "forward_bg.pt");
+            //            torch::save(means3D, "forward_means3D.pt");
+            //            torch::save(colors_precomp, "forward_colors_precomp.pt");
+            //            torch::save(opacities, "forward_opacities.pt");
+            //            torch::save(scales, "forward_scales.pt");
+            //            torch::save(rotations, "forward_rotations.pt");
+            //            torch::save(scale_modifier, "forward_scale_modifier_val.pt");
+            //            torch::save(cov3Ds_precomp, "forward_cov3Ds_precomp.pt");
+            //            torch::save(viewmatrix, "forward_viewmatrix.pt");
+            //            torch::save(projmatrix, "forward_projmatrix.pt");
+            //            torch::save(tanfovx, "forward_tanfovx_val.pt");
+            //            torch::save(tanfovy, "forward_tanfovy_val.pt");
+            //            torch::save(image_height, "forward_image_height_val.pt");
+            //            torch::save(image_width, "forward_image_width_val.pt");
+            //            torch::save(sh, "forward_sh.pt");
+            //            torch::save(sh_degree, "forward_sh_degree_val.pt");
+            //            torch::save(camera_center, "forward_camera_center.pt");
+            //
+            //            torch::save(torch::tensor(num_rendered, torch::dtype(torch::kInt32)), "out_forward_num_rendered.pt");
+            //            torch::save(color, "out_forward_color.pt");
+            //            torch::save(radii, "out_forward_radii.pt");
+            //            torch::save(geomBuffer, "out_forward_geomBuffer.pt");
+            //            torch::save(binningBuffer, "out_forward_binningBuffer.pt");
+            //            torch::save(imgBuffer, "out_forward_imgBuffer.pt");
 
             ctx->save_for_backward({colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer});
             // TODO: Clean up. Too much data saved.
@@ -235,26 +235,26 @@ namespace ref {
             auto binningBuffer = saved[8];
             auto imgBuffer = saved[9];
 
-            torch::save(ctx->saved_data["background"].to<torch::Tensor>(), "background.pt");
-            torch::save(torch::tensor(ctx->saved_data["scale_modifier"].to<float>(), torch::dtype(torch::kFloat32)), "scale_modifier.pt");
-            torch::save(ctx->saved_data["viewmatrix"].to<torch::Tensor>(), "viewmatrix.pt");
-            torch::save(ctx->saved_data["projmatrix"].to<torch::Tensor>(), "projmatrix.pt");
-            torch::save(torch::tensor(ctx->saved_data["tanfovx"].to<float>(), torch::dtype(torch::kFloat32)), "tanfovx.pt");
-            torch::save(torch::tensor(ctx->saved_data["tanfovy"].to<float>(), torch::dtype(torch::kFloat32)), "tanfovy.pt");
-            torch::save(torch::tensor(ctx->saved_data["image_height"].to<int>(), torch::dtype(torch::kInt32)), "image_height.pt");
-            torch::save(torch::tensor(ctx->saved_data["image_width"].to<int>(), torch::dtype(torch::kInt32)), "image_width.pt");
-            torch::save(torch::tensor(ctx->saved_data["sh_degree"].to<int>(), torch::dtype(torch::kInt32)), "sh_degree.pt");
-            torch::save(ctx->saved_data["camera_center"].to<torch::Tensor>(), "camera_center.pt");
-            torch::save(means3D, "means3D.pt");
-            torch::save(radii, "radii.pt");
-            torch::save(colors_precomp, "colors_precomp.pt");
-            torch::save(scales, "scales.pt");
-            torch::save(rotations, "rotations.pt");
-            torch::save(cov3Ds_precomp, "cov3Ds_precomp.pt");
-            torch::save(sh, "sh.pt");
-            torch::save(geomBuffer, "geomBuffer.pt");
-            torch::save(binningBuffer, "binningBuffer.pt");
-            torch::save(imgBuffer, "imgBuffer.pt");
+            //            torch::save(ctx->saved_data["background"].to<torch::Tensor>(), "background.pt");
+            //            torch::save(torch::tensor(ctx->saved_data["scale_modifier"].to<float>(), torch::dtype(torch::kFloat32)), "scale_modifier.pt");
+            //            torch::save(ctx->saved_data["viewmatrix"].to<torch::Tensor>(), "viewmatrix.pt");
+            //            torch::save(ctx->saved_data["projmatrix"].to<torch::Tensor>(), "projmatrix.pt");
+            //            torch::save(torch::tensor(ctx->saved_data["tanfovx"].to<float>(), torch::dtype(torch::kFloat32)), "tanfovx.pt");
+            //            torch::save(torch::tensor(ctx->saved_data["tanfovy"].to<float>(), torch::dtype(torch::kFloat32)), "tanfovy.pt");
+            //            torch::save(torch::tensor(ctx->saved_data["image_height"].to<int>(), torch::dtype(torch::kInt32)), "image_height.pt");
+            //            torch::save(torch::tensor(ctx->saved_data["image_width"].to<int>(), torch::dtype(torch::kInt32)), "image_width.pt");
+            //            torch::save(torch::tensor(ctx->saved_data["sh_degree"].to<int>(), torch::dtype(torch::kInt32)), "sh_degree.pt");
+            //            torch::save(ctx->saved_data["camera_center"].to<torch::Tensor>(), "camera_center.pt");
+            //            torch::save(means3D, "means3D.pt");
+            //            torch::save(radii, "radii.pt");
+            //            torch::save(colors_precomp, "colors_precomp.pt");
+            //            torch::save(scales, "scales.pt");
+            //            torch::save(rotations, "rotations.pt");
+            //            torch::save(cov3Ds_precomp, "cov3Ds_precomp.pt");
+            //            torch::save(sh, "sh.pt");
+            //            torch::save(geomBuffer, "geomBuffer.pt");
+            //            torch::save(binningBuffer, "binningBuffer.pt");
+            //            torch::save(imgBuffer, "imgBuffer.pt");
 
 #ifdef WRITE_TEST_DATA
             auto grad_out_color_copy = grad_out_color.clone();
@@ -303,6 +303,28 @@ namespace ref {
                 imgBuffer,
                 false);
 
+//            auto [grad_means2D1, grad_colors_precomp1, grad_opacities1, grad_means3D1, grad_cov3Ds_precomp1, grad_sh1, grad_scales1, grad_rotations1] = RasterizeGaussiansBackwardCUDA(
+//                ctx->saved_data["background"].to<torch::Tensor>(),
+//                means3D,
+//                radii,
+//                colors_precomp,
+//                scales,
+//                rotations,
+//                ctx->saved_data["scale_modifier"].to<float>(),
+//                cov3Ds_precomp,
+//                ctx->saved_data["viewmatrix"].to<torch::Tensor>(),
+//                ctx->saved_data["projmatrix"].to<torch::Tensor>(),
+//                ctx->saved_data["tanfovx"].to<float>(),
+//                ctx->saved_data["tanfovy"].to<float>(),
+//                grad_out_color,
+//                sh,
+//                ctx->saved_data["sh_degree"].to<int>(),
+//                ctx->saved_data["camera_center"].to<torch::Tensor>(),
+//                geomBuffer,
+//                num_rendered,
+//                binningBuffer,
+//                imgBuffer,
+//                false);
 #ifdef WRITE_TEST_DATA
             saveFunctionData("rasterize_backward_test_data.dat",
                              grad_means2D,
@@ -335,14 +357,62 @@ namespace ref {
                              imgBuffer_copy);
 #endif
 
-            torch::save(grad_means3D, "out_grad_means3D.pt");
-            torch::save(grad_means2D, "out_grad_means2D.pt");
-            torch::save(grad_sh, "out_grad_sh.pt");
-            torch::save(grad_colors_precomp, "out_grad_colors_precomp.pt");
-            torch::save(grad_opacities, "out_grad_opacities.pt");
-            torch::save(grad_scales, "out_grad_scales.pt");
-            torch::save(grad_rotations, "out_grad_rotations.pt");
-            torch::save(grad_cov3Ds_precomp, "out_grad_cov3Ds_precomp.pt");
+            //            if (torch::equal(grad_means3D, grad_means3D1)) {
+            //                std::cout << "Backwardsref grad_means3D and grad_means3D1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "Backwardsref grad_means3D and grad_means3D1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(grad_means2D, grad_means2D1)) {
+            //                std::cout << "Backwardsref grad_means2D and grad_means2D1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "Backwardsref grad_means2D and grad_means2D1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(grad_sh, grad_sh1)) {
+            //                std::cout << "Backwardsref grad_sh and grad_sh1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "Backwardsref grad_sh and grad_sh1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(grad_colors_precomp, grad_colors_precomp1)) {
+            //                std::cout << "Backwardsref grad_colors_precomp and grad_colors_precomp1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "Backwardsref grad_colors_precomp and grad_colors_precomp1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(grad_opacities, grad_opacities1)) {
+            //                std::cout << "Backwardsref grad_opacities and grad_opacities1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "Backwardsref grad_opacities and grad_opacities1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(grad_scales, grad_scales1)) {
+            //                std::cout << "Backwardsref grad_scales and grad_scales1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "Backwardsref grad_scales and grad_scales1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(grad_rotations, grad_rotations1)) {
+            //                std::cout << "Backwardsref grad_rotations and grad_rotations1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "Backwardsref grad_rotations and grad_rotations1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            if (torch::equal(grad_cov3Ds_precomp, grad_cov3Ds_precomp1)) {
+            //                std::cout << "Backwardsref grad_cov3Ds_precomp and grad_cov3Ds_precomp1 are equal!" << std::endl;
+            //            } else {
+            //                std::cout << "Backwardsref grad_cov3Ds_precomp and grad_cov3Ds_precomp1 are NOT equal!" << std::endl;
+            //            }
+            //
+            //            torch::save(grad_means3D, "out_grad_means3D.pt");
+            //            torch::save(grad_means2D, "out_grad_means2D.pt");
+            //            torch::save(grad_sh, "out_grad_sh.pt");
+            //            torch::save(grad_colors_precomp, "out_grad_colors_precomp.pt");
+            //            torch::save(grad_opacities, "out_grad_opacities.pt");
+            //            torch::save(grad_scales, "out_grad_scales.pt");
+            //            torch::save(grad_rotations, "out_grad_rotations.pt");
+            //            torch::save(grad_cov3Ds_precomp, "out_grad_cov3Ds_precomp.pt");
 
             // return gradients for all inputs, 19 in total. :D
             return {grad_means3D,

@@ -271,80 +271,80 @@ int main(int argc, char* argv[]) {
 
         {
             torch::NoGradGuard no_grad;
-            double abs_tol = 1e-3;
-            double rel_tol = 1e-3;
-            ts::print_debug_info(ref_image.grad(), "ref_image.grad()");
-            ts::print_debug_info(dloss_dimage, "dloss_dimage");
-            if (!torch::allclose(dloss_dimage, ref_image.grad(), 1e-5, 1e-5)) {
-                std::cout << "Diff dloss_dimage" << std::endl;
-                auto diff = torch::abs(dloss_dimage - ref_image.grad());
-                auto max = torch::max(diff);
-                auto min = torch::min(diff);
-                std::cout << "Diff dloss_dimage Max: " << max << ", Min: " << min << std::endl;
-            }
-
-            if (!torch::allclose(grad_means2D, ref_viewspace_points.grad(), rel_tol, abs_tol)) {
-                std::cout << "Diff grad_means 2D" << std::endl;
-                auto diff = torch::abs(grad_means2D - ref_viewspace_points.grad());
-                auto max = torch::max(diff);
-                auto min = torch::min(diff);
-                std::cout << "Diff grad_means 2D Max: " << max << ", Min: " << min << std::endl;
-            }
-
-            if (!torch::allclose(grad_means3D, ref_gaussians._xyz.grad(), rel_tol, abs_tol)) {
-                std::cout << "Diff grad_means 3D" << std::endl;
-                auto diff = torch::abs(grad_means3D - ref_gaussians._xyz.grad());
-                auto max = torch::max(diff);
-                auto min = torch::min(diff);
-                std::cout << "Diff grad_means 3D Max: " << max << ", Min: " << min << std::endl;
-            }
-
-            const auto grad_features_dc = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1), torch::indexing::Slice()}).contiguous();
-            const auto grad_features_rest = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None), torch::indexing::Slice()}).contiguous();
-
-            if (!torch::allclose(grad_features_dc, ref_gaussians._features_dc.grad(), rel_tol, abs_tol)) {
-                std::cout << "Diff _features_dc" << std::endl;
-                auto diff = torch::abs(grad_features_dc - ref_gaussians._features_dc.grad());
-                auto max = torch::max(diff);
-                auto min = torch::min(diff);
-                std::cout << "Diff _features_dc Max: " << max << ", Min: " << min << std::endl;
-            }
-
-            if (!torch::allclose(grad_features_rest, ref_gaussians._features_rest.grad(), rel_tol, abs_tol)) {
-                std::cout << "Diff _features_rest" << std::endl;
-                auto diff = torch::abs(grad_features_rest - ref_gaussians._features_rest.grad());
-                auto max = torch::max(diff);
-                auto min = torch::min(diff);
-                std::cout << "Diff _features_rest Max: " << max << ", Min: " << min << std::endl;
-            }
-
-            ts::print_debug_info(grad_opacities, "grad_opacities");
-            ts::print_debug_info(ref_gaussians._opacity.grad(), "ref_gaussians._opacity.grad()");
-            if (!torch::allclose(grad_opacities, ref_gaussians._opacity.grad(), rel_tol, abs_tol)) {
-                std::cout << "Diff _opacity" << std::endl;
-                auto diff = torch::abs(grad_opacities - ref_gaussians._opacity.grad());
-                auto max = torch::max(diff);
-                auto min = torch::min(diff);
-                std::cout << "Diff _opacity Max: " << max << ", Min: " << min << std::endl;
-            }
-
-            ts::print_debug_info(grad_scales, "grad_scales");
-            ts::print_debug_info(ref_gaussians._scaling.grad(), "ref_gaussians._scaling.grad()");
-            if (!torch::allclose(grad_scales, ref_gaussians._scaling.grad(), rel_tol, abs_tol)) {
-                std::cout << "Diff _scaling" << std::endl;
-                auto diff = torch::abs(grad_scales - ref_gaussians._scaling.grad());
-                auto max = torch::max(diff);
-                auto min = torch::min(diff);
-                std::cout << "Diff _scaling Max: " << max << ", Min: " << min << std::endl;
-            }
-
-            if (!torch::allclose(grad_rotations, ref_gaussians._rotation.grad(), rel_tol, abs_tol)) {
-                std::cout << "Diff _rotation" << std::endl;
-                auto diff = torch::abs(grad_rotations - ref_gaussians._rotation.grad());
-                auto max = torch::max(diff);
-                auto min = torch::min(diff);
-                std::cout << "Diff _rotation Max: " << max << ", Min: " << min << std::endl;
-            }
+            //            double abs_tol = 1e-3;
+            //            double rel_tol = 1e-3;
+            //            ts::print_debug_info(ref_image.grad(), "ref_image.grad()");
+            //            ts::print_debug_info(dloss_dimage, "dloss_dimage");
+            //            if (!torch::allclose(dloss_dimage, ref_image.grad(), 1e-5, 1e-5)) {
+            //                std::cout << "Diff dloss_dimage" << std::endl;
+            //                auto diff = torch::abs(dloss_dimage - ref_image.grad());
+            //                auto max = torch::max(diff);
+            //                auto min = torch::min(diff);
+            //                std::cout << "Diff dloss_dimage Max: " << max << ", Min: " << min << std::endl;
+            //            }
+            //
+            //            if (!torch::allclose(grad_means2D, ref_viewspace_points.grad(), rel_tol, abs_tol)) {
+            //                std::cout << "Diff grad_means 2D" << std::endl;
+            //                auto diff = torch::abs(grad_means2D - ref_viewspace_points.grad());
+            //                auto max = torch::max(diff);
+            //                auto min = torch::min(diff);
+            //                std::cout << "Diff grad_means 2D Max: " << max << ", Min: " << min << std::endl;
+            //            }
+            //
+            //            if (!torch::allclose(grad_means3D, ref_gaussians._xyz.grad(), rel_tol, abs_tol)) {
+            //                std::cout << "Diff grad_means 3D" << std::endl;
+            //                auto diff = torch::abs(grad_means3D - ref_gaussians._xyz.grad());
+            //                auto max = torch::max(diff);
+            //                auto min = torch::min(diff);
+            //                std::cout << "Diff grad_means 3D Max: " << max << ", Min: " << min << std::endl;
+            //            }
+            //
+            //            const auto grad_features_dc = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(0, 1), torch::indexing::Slice()}).contiguous();
+            //            const auto grad_features_rest = grad_sh.index({torch::indexing::Slice(), torch::indexing::Slice(1, torch::indexing::None), torch::indexing::Slice()}).contiguous();
+            //
+            //            if (!torch::allclose(grad_features_dc, ref_gaussians._features_dc.grad(), rel_tol, abs_tol)) {
+            //                std::cout << "Diff _features_dc" << std::endl;
+            //                auto diff = torch::abs(grad_features_dc - ref_gaussians._features_dc.grad());
+            //                auto max = torch::max(diff);
+            //                auto min = torch::min(diff);
+            //                std::cout << "Diff _features_dc Max: " << max << ", Min: " << min << std::endl;
+            //            }
+            //
+            //            if (!torch::allclose(grad_features_rest, ref_gaussians._features_rest.grad(), rel_tol, abs_tol)) {
+            //                std::cout << "Diff _features_rest" << std::endl;
+            //                auto diff = torch::abs(grad_features_rest - ref_gaussians._features_rest.grad());
+            //                auto max = torch::max(diff);
+            //                auto min = torch::min(diff);
+            //                std::cout << "Diff _features_rest Max: " << max << ", Min: " << min << std::endl;
+            //            }
+            //
+            //            ts::print_debug_info(grad_opacities, "grad_opacities");
+            //            ts::print_debug_info(ref_gaussians._opacity.grad(), "ref_gaussians._opacity.grad()");
+            //            if (!torch::allclose(grad_opacities, ref_gaussians._opacity.grad(), rel_tol, abs_tol)) {
+            //                std::cout << "Diff _opacity" << std::endl;
+            //                auto diff = torch::abs(grad_opacities - ref_gaussians._opacity.grad());
+            //                auto max = torch::max(diff);
+            //                auto min = torch::min(diff);
+            //                std::cout << "Diff _opacity Max: " << max << ", Min: " << min << std::endl;
+            //            }
+            //
+            //            ts::print_debug_info(grad_scales, "grad_scales");
+            //            ts::print_debug_info(ref_gaussians._scaling.grad(), "ref_gaussians._scaling.grad()");
+            //            if (!torch::allclose(grad_scales, ref_gaussians._scaling.grad(), rel_tol, abs_tol)) {
+            //                std::cout << "Diff _scaling" << std::endl;
+            //                auto diff = torch::abs(grad_scales - ref_gaussians._scaling.grad());
+            //                auto max = torch::max(diff);
+            //                auto min = torch::min(diff);
+            //                std::cout << "Diff _scaling Max: " << max << ", Min: " << min << std::endl;
+            //            }
+            //
+            //            if (!torch::allclose(grad_rotations, ref_gaussians._rotation.grad(), rel_tol, abs_tol)) {
+            //                std::cout << "Diff _rotation" << std::endl;
+            //                auto diff = torch::abs(grad_rotations - ref_gaussians._rotation.grad());
+            //                auto max = torch::max(diff);
+            //                auto min = torch::min(diff);
+            //                std::cout << "Diff _rotation Max: " << max << ", Min: " << min << std::endl;
+            //            }
 
             auto visible_max_radii = gaussians._max_radii2D.masked_select(visibility_filter);
             auto visible_radii = radii.masked_select(visibility_filter);
