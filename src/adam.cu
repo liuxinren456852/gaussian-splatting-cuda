@@ -112,25 +112,25 @@ namespace gs {
             //                throw std::runtime_error("Gradient shape does not match parameter shape for " + Map_param_type_to_string(GetType()));
             //            }
             switch (_param_type) {
-            case ParamType::Scaling:
-            case ParamType::Rotation:
-            case ParamType::Opacity:
-            case ParamType::Pos: {
-                // std::cout << "\nAdamUpdatePos_Scaling_Kernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
-                // std::cout << std::setprecision(6) << "lr " << _lr << ", beta1 " << _beta1 << ", beta2 " << _beta2 << std::endl;
-                AdamUpdatePos_Scaling_Kernel<<<blocks_per_grid, threads_per_block>>>(
-                    _d_params.contiguous().data_ptr<float>(),
-                    _d_params_grad.contiguous().data_ptr<float>(),
-                    _d_avg.contiguous().data_ptr<float>(),
-                    _d_avg_sq.contiguous().data_ptr<float>(),
-                    step.item<int>(),
-                    _d_params.numel(),
-                    _lr,
-                    _beta1,
-                    _beta2,
-                    _epsilon);
-                CHECK_LAST_CUDA_ERROR();
-            } break;
+                //            case ParamType::Scaling:
+                //            case ParamType::Rotation:
+                //            case ParamType::Opacity:
+                //            case ParamType::Pos: {
+                //                // std::cout << "\nAdamUpdatePos_Scaling_Kernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
+                //                // std::cout << std::setprecision(6) << "lr " << _lr << ", beta1 " << _beta1 << ", beta2 " << _beta2 << std::endl;
+                //                AdamUpdatePos_Scaling_Kernel<<<blocks_per_grid, threads_per_block>>>(
+                //                    _d_params.contiguous().data_ptr<float>(),
+                //                    _d_params_grad.contiguous().data_ptr<float>(),
+                //                    _d_avg.contiguous().data_ptr<float>(),
+                //                    _d_avg_sq.contiguous().data_ptr<float>(),
+                //                    step.item<int>(),
+                //                    _d_params.numel(),
+                //                    _lr,
+                //                    _beta1,
+                //                    _beta2,
+                //                    _epsilon);
+                //                CHECK_LAST_CUDA_ERROR();
+                //            } break;
                 //            case ParamType::Scaling: {
                 //                //                std::cout << "\nAdamUpdatePos_Scaling_Kernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
                 //                //                std::cout <<  std::setprecision(6) <<"lr " << _lr << ", beta1 " << _beta1 << ", beta2 " << _beta2 << std::endl;

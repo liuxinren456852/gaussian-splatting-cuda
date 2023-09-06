@@ -9,7 +9,7 @@ namespace gs {
     namespace loss {
         std::pair<torch::Tensor, torch::Tensor> l1_loss(const torch::Tensor& network_output, const torch::Tensor& gt) {
             auto L1l = torch::abs((network_output - gt)).mean();
-            auto dL_l1_loss = torch::sign(network_output - gt) / static_cast<float>(network_output.numel());
+            auto dL_l1_loss = torch::sign(network_output - gt) / static_cast<float>(network_output.size(1) * network_output.size(2));
             return {L1l, dL_l1_loss};
         }
 
@@ -35,7 +35,7 @@ namespace gs {
         // luminance, and contrast.
         std::pair<torch::Tensor, torch::Tensor> ssim(const torch::Tensor& img1, const torch::Tensor& img2, const torch::Tensor& window, int window_size, int channel) {
 
-            const uint32_t N_sq = img1.numel() * img1.numel();
+            const uint32_t N_sq = img1.size(1) * img1.size(1) * img1.size(2) * img1.size(2);
             static const float C1 = 0.01f * 0.01f;
             static const float C2 = 0.03f * 0.03f;
 
