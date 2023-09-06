@@ -150,7 +150,7 @@ int main(int argc, char* argv[]) {
 
     const int window_size = 11;
     const int channel = 3;
-    const auto conv_window = gaussian_splatting::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
+    const auto conv_window = gs::loss::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
     const int camera_count = scene.Get_camera_count();
 
     std::vector<int> indices;
@@ -175,10 +175,22 @@ int main(int argc, char* argv[]) {
         // Render
         auto [image, viewspace_point_tensor, visibility_filter, radii] = render(cam, gaussians, background);
 
+        auto loss_func = [&optimParams, &conv_window, &window_size, &channel](const torch::Tensor& image, const torch::Tensor& gt_image) {
+            auto [L1l, dL_l1_loss] = gs::loss::l1_loss(image, gt_image);
+            auto [ssim_loss, dL_ssim_dimg1] = gs::loss::ssim(image, gt_image, conv_window, window_size, channel);
+
+            auto loss = (1.f - optimParams.lambda_dssim) * L1l + optimParams.lambda_dssim * (1.f - ssim_loss);
+
+            const auto ref_dloss_dssim = -optimParams.lambda_dssim;
+            const auto ref_dloss_dLl1 = 1.f - optimParams.lambda_dssim;
+            const auto ref_dloss_dimage = ref_dloss_dLl1 * dL_l1_loss + ref_dloss_dssim * dL_ssim_dimg1;
+            return std::make_tuple(loss, ref_dloss_dimage);
+        };
+
+        auto [loss, ref_dloss_dimage] = loss_func(image, gt_image);
         // Loss Computations
-        auto l1l = gaussian_splatting::l1_loss(image, gt_image);
-        auto ssim_loss = gaussian_splatting::ssim(image, gt_image, conv_window, window_size, channel);
-        auto loss = (1.f - optimParams.lambda_dssim) * l1l + optimParams.lambda_dssim * (1.f - ssim_loss);
+
+        torch::save(ref_dloss_dimage, "image_loss.pt");
 
         // Update status line
         if (iter % 100 == 0) {
@@ -214,6 +226,12 @@ int main(int argc, char* argv[]) {
         }
         loss_add += loss.item<float>();
         loss.backward();
+
+        //        torch::Tensor color_grad;
+        //        torch::load(color_grad, "grad_out_color.pt");
+        //        auto diff = torch::abs(ref_dloss_dimage - color_grad);
+        //        auto max_diff = torch::max(diff);
+        //        std::cout << "Iter: " << iter << std::setprecision(8) << ", Max diff: " << max_diff.item<float>() << std::endl;
 
         {
             torch::NoGradGuard no_grad;
@@ -272,8 +290,8 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl
               << "All done in "
               << std::fixed << std::setw(7) << std::setprecision(3) << time_elapsed.count() << "s, avg "
-              << std::fixed << std::setw(4) << std::setprecision(1) << 1.0 * optimParams.iterations / time_elapsed.count() << " iter/s"
-              << std::endl;
+              << std::fixed << std::setw(4) << std::setprecision(1) << 1.0 * optimParams.iterations / time_elapsed.count() << " iter/s "
+              << std::fixed << std::setw(4) << gaussians.Get_xyz().size(0) << " splats" << std::endl;
 
     return 0;
 }
