@@ -1,17 +1,19 @@
 // Copyright (c) 2023 Janusch Patas.
 #include "adam.cuh"
 #include "debug_utils.cuh"
+#include <cuda_runtime.h>
 #include <utility>
 
 namespace gs {
     namespace optim {
 
-        __global__ void AdamUpdatePos_Scaling_Kernel(float3* params,
-                                                     const float3* d_params_grad,
-                                                     float3* d_avg,
-                                                     float3* d_avg_sq,
-                                                     int32_t* __restrict__ d_steps,
-                                                     int size, float lr_t,
+        __global__ void AdamUpdatePos_Scaling_Kernel(float* params,
+                                                     const float* d_params_grad,
+                                                     float* d_avg,
+                                                     float* d_avg_sq,
+                                                     int32_t step,
+                                                     long size,
+                                                     float lr_t,
                                                      float beta1,
                                                      float beta2,
                                                      float epsilon);
@@ -69,9 +71,9 @@ namespace gs {
         AdamParameter::~AdamParameter() {
         }
 
-        void AdamParameter::Step(cudaStream_t stream, int step) {
-            //            static const int threads_per_block = 256;
-            //            static const int blocks_per_grid = (_d_params.size(0) + threads_per_block - 1) / threads_per_block;
+        void AdamParameter::Step(cudaStream_t stream, torch::Tensor step) {
+            static const int threads_per_block = 256;
+            static const int blocks_per_grid = (static_cast<int>(_d_params.numel()) + threads_per_block - 1) / threads_per_block;
             //            const bool avg_equal = _d_avg.sizes() == _d_params.sizes();
             //            const bool param_equal = _d_params.sizes() == _d_params_grad.sizes();
 
@@ -81,15 +83,6 @@ namespace gs {
             //            const float3 param_grad = d_params_grad[idx];
             //            const int32_t current_step = ++d_steps[idx];
             //
-            _d_avg = _beta1 * _d_avg + (1.f - _beta1) * _d_params_grad;
-            _d_avg_sq = _beta2 * _d_avg_sq + (1.f - _beta2) * _d_params_grad * _d_params_grad;
-
-            float bias_correction1 = 1.f - std::pow(_beta1, step);
-            float bias_correction2 = 1.f - std::pow(_beta2, step);
-            float bias_correction2_sqrt_inv = 1.f / std::sqrt(bias_correction2);
-            const auto denom = (_d_avg_sq.sqrt() * bias_correction2_sqrt_inv) + _epsilon;
-            auto step_size = _lr / bias_correction1;
-            _d_params -= step_size * (_d_avg / denom);
             //            // Bias correction terms
             //            const float bias_correction1 = 1.f - powf(beta1, (float)current_step);
             //            const float bias_correction2 = 1.f - powf(beta2, (float)current_step);
@@ -118,110 +111,120 @@ namespace gs {
             //            if (!avg_equal || !param_equal) {
             //                throw std::runtime_error("Gradient shape does not match parameter shape for " + Map_param_type_to_string(GetType()));
             //            }
-            //            switch (_param_type) {
-            //            case ParamType::Pos: {
-            //                //                std::cout << "\nAdamUpdatePos_Scaling_Kernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
-            //                //                std::cout << std::setprecision(6) << "lr " << _lr << ", beta1 " << _beta1 << ", beta2 " << _beta2 << std::endl;
-            //                AdamUpdatePos_Scaling_Kernel<<<blocks_per_grid, threads_per_block>>>(
-            //                    reinterpret_cast<pos_param_t*>(_d_params.data_ptr<float>()),
-            //                    reinterpret_cast<pos_param_t*>(_d_params_grad.data_ptr<float>()),
-            //                    reinterpret_cast<pos_param_t*>(_d_avg.data_ptr<float>()),
-            //                    reinterpret_cast<pos_param_t*>(_d_avg_sq.data_ptr<float>()),
-            //                    _d_steps.data_ptr<int32_t>(),
-            //                    _d_params.size(0),
-            //                    _lr,
-            //                    _beta1,
-            //                    _beta2,
-            //                    _epsilon);
-            //                CHECK_LAST_CUDA_ERROR();
-            //                cudaDeviceSynchronize();
-            //            } break;
-            //            case ParamType::Scaling: {
-            //                //                std::cout << "\nAdamUpdatePos_Scaling_Kernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
-            //                //                std::cout <<  std::setprecision(6) <<"lr " << _lr << ", beta1 " << _beta1 << ", beta2 " << _beta2 << std::endl;
-            //                AdamUpdatePos_Scaling_Kernel<<<blocks_per_grid, threads_per_block>>>(
-            //                    reinterpret_cast<scaling_param_t*>(_d_params.data_ptr<float>()),
-            //                    reinterpret_cast<scaling_param_t*>(_d_params_grad.data_ptr<float>()),
-            //                    reinterpret_cast<scaling_param_t*>(_d_avg.data_ptr<float>()),
-            //                    reinterpret_cast<scaling_param_t*>(_d_avg_sq.data_ptr<float>()),
-            //                    _d_steps.data_ptr<int32_t>(),
-            //                    _d_params.size(0),
-            //                    _lr,
-            //                    _beta1,
-            //                    _beta2,
-            //                    _epsilon);
-            //                CHECK_LAST_CUDA_ERROR();
-            //                cudaDeviceSynchronize();
-            //            } break;
-            //            case ParamType::Rotation: {
-            //                //                std::cout << "AdamUpdateRotationKernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
-            //                AdamUpdateRotationKernel<<<blocks_per_grid, threads_per_block>>>(
-            //                    reinterpret_cast<rotation_param_t*>(_d_params.data_ptr<float>()),
-            //                    reinterpret_cast<rotation_param_t*>(_d_params_grad.data_ptr<float>()),
-            //                    reinterpret_cast<rotation_param_t*>(_d_avg.data_ptr<float>()),
-            //                    reinterpret_cast<rotation_param_t*>(_d_avg_sq.data_ptr<float>()),
-            //                    _d_steps.data_ptr<int32_t>(),
-            //                    _d_params.size(0),
-            //                    _lr,
-            //                    _beta1,
-            //                    _beta2,
-            //                    _epsilon);
-            //                CHECK_LAST_CUDA_ERROR();
-            //                cudaDeviceSynchronize();
-            //            } break;
-            //            case ParamType::Opacity: {
-            //                //                std::cout << "AdamUpdateOpactiyKernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
-            //                AdamUpdateOpactiyKernel<<<blocks_per_grid, threads_per_block>>>(
-            //                    reinterpret_cast<opacity_param_t*>(_d_params.data_ptr<float>()),
-            //                    reinterpret_cast<opacity_param_t*>(_d_params_grad.data_ptr<float>()),
-            //                    reinterpret_cast<opacity_param_t*>(_d_avg.data_ptr<float>()),
-            //                    reinterpret_cast<opacity_param_t*>(_d_avg_sq.data_ptr<float>()),
-            //                    _d_steps.data_ptr<int32_t>(),
-            //                    _d_params.size(0),
-            //                    _lr,
-            //                    _beta1,
-            //                    _beta2,
-            //                    _epsilon);
-            //                CHECK_LAST_CUDA_ERROR();
-            //                cudaDeviceSynchronize();
-            //            } break;
-            //            case ParamType::Features_dc: {
-            //                //                std::cout << "AdamUpdateFeatureKernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
-            //                AdamUpdateFeatureKernel<<<blocks_per_grid, threads_per_block>>>(
-            //                    reinterpret_cast<feature_dc_param_t*>(_d_params.data_ptr<float>()),
-            //                    reinterpret_cast<feature_dc_param_t*>(_d_params_grad.data_ptr<float>()),
-            //                    reinterpret_cast<feature_dc_param_t*>(_d_avg.data_ptr<float>()),
-            //                    reinterpret_cast<feature_dc_param_t*>(_d_avg_sq.data_ptr<float>()),
-            //                    _d_steps.data_ptr<int32_t>(),
-            //                    _d_params.size(0),
-            //                    _d_params.size(1),
-            //                    _lr,
-            //                    _beta1,
-            //                    _beta2,
-            //                    _epsilon);
-            //                CHECK_LAST_CUDA_ERROR();
-            //                cudaDeviceSynchronize();
-            //            } break;
-            //            case ParamType::Features_rest: {
-            //                //                std::cout << "AdamUpdateFeatureKernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
-            //                AdamUpdateFeatureKernel<<<blocks_per_grid, threads_per_block>>>(
-            //                    reinterpret_cast<feature_rest_param_t*>(_d_params.data_ptr<float>()),
-            //                    reinterpret_cast<feature_rest_param_t*>(_d_params_grad.data_ptr<float>()),
-            //                    reinterpret_cast<feature_rest_param_t*>(_d_avg.data_ptr<float>()),
-            //                    reinterpret_cast<feature_rest_param_t*>(_d_avg_sq.data_ptr<float>()),
-            //                    _d_steps.data_ptr<int32_t>(),
-            //                    _d_params.size(0),
-            //                    _d_params.size(1),
-            //                    _lr,
-            //                    _beta1,
-            //                    _beta2,
-            //                    _epsilon);
-            //                CHECK_LAST_CUDA_ERROR();
-            //                cudaDeviceSynchronize();
-            //            } break;
-            //            default:
-            //                throw std::runtime_error("Unknown parameter type");
-            //            }
+            switch (_param_type) {
+            case ParamType::Scaling:
+            case ParamType::Rotation:
+            case ParamType::Opacity:
+            case ParamType::Pos: {
+                // std::cout << "\nAdamUpdatePos_Scaling_Kernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
+                // std::cout << std::setprecision(6) << "lr " << _lr << ", beta1 " << _beta1 << ", beta2 " << _beta2 << std::endl;
+                AdamUpdatePos_Scaling_Kernel<<<blocks_per_grid, threads_per_block>>>(
+                    _d_params.contiguous().data_ptr<float>(),
+                    _d_params_grad.contiguous().data_ptr<float>(),
+                    _d_avg.contiguous().data_ptr<float>(),
+                    _d_avg_sq.contiguous().data_ptr<float>(),
+                    step.item<int>(),
+                    _d_params.numel(),
+                    _lr,
+                    _beta1,
+                    _beta2,
+                    _epsilon);
+                CHECK_LAST_CUDA_ERROR();
+            } break;
+                //            case ParamType::Scaling: {
+                //                //                std::cout << "\nAdamUpdatePos_Scaling_Kernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
+                //                //                std::cout <<  std::setprecision(6) <<"lr " << _lr << ", beta1 " << _beta1 << ", beta2 " << _beta2 << std::endl;
+                //                AdamUpdatePos_Scaling_Kernel<<<blocks_per_grid, threads_per_block>>>(
+                //                    reinterpret_cast<scaling_param_t*>(_d_params.data_ptr<float>()),
+                //                    reinterpret_cast<scaling_param_t*>(_d_params_grad.data_ptr<float>()),
+                //                    reinterpret_cast<scaling_param_t*>(_d_avg.data_ptr<float>()),
+                //                    reinterpret_cast<scaling_param_t*>(_d_avg_sq.data_ptr<float>()),
+                //                    _d_steps.data_ptr<int32_t>(),
+                //                    _d_params.size(0),
+                //                    _lr,
+                //                    _beta1,
+                //                    _beta2,
+                //                    _epsilon);
+                //                CHECK_LAST_CUDA_ERROR();
+                //                cudaDeviceSynchronize();
+                //            } break;
+                //            case ParamType::Rotation: {
+                //                //                std::cout << "AdamUpdateRotationKernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
+                //                AdamUpdateRotationKernel<<<blocks_per_grid, threads_per_block>>>(
+                //                    reinterpret_cast<rotation_param_t*>(_d_params.data_ptr<float>()),
+                //                    reinterpret_cast<rotation_param_t*>(_d_params_grad.data_ptr<float>()),
+                //                    reinterpret_cast<rotation_param_t*>(_d_avg.data_ptr<float>()),
+                //                    reinterpret_cast<rotation_param_t*>(_d_avg_sq.data_ptr<float>()),
+                //                    _d_steps.data_ptr<int32_t>(),
+                //                    _d_params.size(0),
+                //                    _lr,
+                //                    _beta1,
+                //                    _beta2,
+                //                    _epsilon);
+                //                CHECK_LAST_CUDA_ERROR();
+                //                cudaDeviceSynchronize();
+                //            } break;
+                //            case ParamType::Opacity: {
+                //                //                std::cout << "AdamUpdateOpactiyKernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
+                //                AdamUpdateOpactiyKernel<<<blocks_per_grid, threads_per_block>>>(
+                //                    reinterpret_cast<opacity_param_t*>(_d_params.data_ptr<float>()),
+                //                    reinterpret_cast<opacity_param_t*>(_d_params_grad.data_ptr<float>()),
+                //                    reinterpret_cast<opacity_param_t*>(_d_avg.data_ptr<float>()),
+                //                    reinterpret_cast<opacity_param_t*>(_d_avg_sq.data_ptr<float>()),
+                //                    _d_steps.data_ptr<int32_t>(),
+                //                    _d_params.size(0),
+                //                    _lr,
+                //                    _beta1,
+                //                    _beta2,
+                //                    _epsilon);
+                //                CHECK_LAST_CUDA_ERROR();
+                //                cudaDeviceSynchronize();
+                //            } break;
+                //            case ParamType::Features_dc: {
+                //                //                std::cout << "AdamUpdateFeatureKernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
+                //                AdamUpdateFeatureKernel<<<blocks_per_grid, threads_per_block>>>(
+                //                    reinterpret_cast<feature_dc_param_t*>(_d_params.data_ptr<float>()),
+                //                    reinterpret_cast<feature_dc_param_t*>(_d_params_grad.data_ptr<float>()),
+                //                    reinterpret_cast<feature_dc_param_t*>(_d_avg.data_ptr<float>()),
+                //                    reinterpret_cast<feature_dc_param_t*>(_d_avg_sq.data_ptr<float>()),
+                //                    _d_steps.data_ptr<int32_t>(),
+                //                    _d_params.size(0),
+                //                    _d_params.size(1),
+                //                    _lr,
+                //                    _beta1,
+                //                    _beta2,
+                //                    _epsilon);
+                //                CHECK_LAST_CUDA_ERROR();
+                //                cudaDeviceSynchronize();
+                //            } break;
+                //            case ParamType::Features_rest: {
+                //                //                std::cout << "AdamUpdateFeatureKernel " + Map_param_type_to_string(GetType()) + " shape: " << _d_params.size(0) << ", " << _d_params.size(1) << std::endl;
+                //                AdamUpdateFeatureKernel<<<blocks_per_grid, threads_per_block>>>(
+                //                    reinterpret_cast<feature_rest_param_t*>(_d_params.data_ptr<float>()),
+                //                    reinterpret_cast<feature_rest_param_t*>(_d_params_grad.data_ptr<float>()),
+                //                    reinterpret_cast<feature_rest_param_t*>(_d_avg.data_ptr<float>()),
+                //                    reinterpret_cast<feature_rest_param_t*>(_d_avg_sq.data_ptr<float>()),
+                //                    _d_steps.data_ptr<int32_t>(),
+                //                    _d_params.size(0),
+                //                    _d_params.size(1),
+                //                    _lr,
+                //                    _beta1,
+                //                    _beta2,
+                //                    _epsilon);
+                //                CHECK_LAST_CUDA_ERROR();
+                //                cudaDeviceSynchronize();
+                //            } break;
+            default:
+                _d_avg = _beta1 * _d_avg + (1.f - _beta1) * _d_params_grad;
+                _d_avg_sq = _beta2 * _d_avg_sq + (1.f - _beta2) * _d_params_grad * _d_params_grad;
+
+                float bias_correction1 = 1.f - std::pow(_beta1, static_cast<float>(step.item<int>()));
+                float bias_correction2 = 1.f - std::pow(_beta2, static_cast<float>(step.item<int>()));
+                float bias_correction2_sqrt_inv = 1.f / std::sqrt(bias_correction2);
+                const auto denom = (_d_avg_sq.sqrt() * bias_correction2_sqrt_inv) + _epsilon;
+                auto step_size = _lr / bias_correction1;
+                _d_params -= step_size * (_d_avg / denom);
+            }
         }
 
         void Adam::Step(cudaStream_t stream) {
@@ -229,7 +232,7 @@ namespace gs {
             //                param->Step(stream);
             //                cudaDeviceSynchronize();
             //            }
-            ++_global_step;
+            _global_step = 1 + _global_step;
             _params[ParamType::Pos]->Step(stream, _global_step);
             _params[ParamType::Scaling]->Step(stream, _global_step);
             _params[ParamType::Rotation]->Step(stream, _global_step);
@@ -278,12 +281,12 @@ namespace gs {
             _params[param->GetType()] = param;
         }
 
-        __global__ void AdamUpdatePos_Scaling_Kernel(float3* __restrict__ params,
-                                                     const float3* __restrict__ d_params_grad,
-                                                     float3* __restrict__ d_avg,
-                                                     float3* __restrict__ d_avg_sq,
-                                                     int32_t* __restrict__ d_steps,
-                                                     int size,
+        __global__ void AdamUpdatePos_Scaling_Kernel(float* __restrict__ params,
+                                                     const float* __restrict__ d_params_grad,
+                                                     float* __restrict__ d_avg,
+                                                     float* __restrict__ d_avg_sq,
+                                                     int32_t step,
+                                                     long size,
                                                      float lr_t,
                                                      float beta1,
                                                      float beta2,
@@ -294,38 +297,23 @@ namespace gs {
             // only execute if the index is within the size of the weights/biases
             if (idx < size) {
                 // compute the new moving average of the gradient
-                float3 avg = d_avg[idx];
-                float3 avg_sq = d_avg_sq[idx];
-                float3 param = params[idx];
-                const float3 param_grad = d_params_grad[idx];
-                const int32_t current_step = ++d_steps[idx];
+                float avg = d_avg[idx];
+                float avg_sq = d_avg_sq[idx];
+                const float param_grad = d_params_grad[idx];
+                const int32_t current_step = step;
+
+                avg = beta1 * avg + (1.f - beta1) * param_grad;
+                avg_sq = beta2 * avg_sq + (1.f - beta2) * (param_grad * param_grad);
 
                 // Bias correction terms
-                const float bias_correction1 = 1.f - powf(beta1, (float)current_step);
-                const float bias_correction2 = 1.f - powf(beta2, (float)current_step);
-                const float bias_correction2_sqrt = sqrtf(bias_correction2);
+                const float bias_correction1 = 1.f - pow(beta1, (float)current_step);
+                const float bias_correction2 = 1.f - pow(beta2, (float)current_step);
+                const float bias_correction2_sqrt_inv = 1.f / sqrtf(bias_correction2);
 
-                avg.x = beta1 * avg.x + (1.f - beta1) * param_grad.x;
-                avg.y = beta1 * avg.y + (1.f - beta1) * param_grad.y;
-                avg.z = beta1 * avg.z + (1.f - beta1) * param_grad.z;
-
-                // compute the new moving average of the squared gradient
-                avg_sq.x = beta2 * avg_sq.x + (1.f - beta2) * param_grad.x * param_grad.x;
-                avg_sq.y = beta2 * avg_sq.y + (1.f - beta2) * param_grad.y * param_grad.y;
-                avg_sq.z = beta2 * avg_sq.z + (1.f - beta2) * param_grad.z * param_grad.z;
-
-                // Compute step size considering bias correction
-                const float step_size = -lr_t / bias_correction1;
-
-                const float denom_x = sqrtf(avg_sq.x) / bias_correction2_sqrt + epsilon;
-                const float denom_y = sqrtf(avg_sq.y) / bias_correction2_sqrt + epsilon;
-                const float denom_z = sqrtf(avg_sq.z) / bias_correction2_sqrt + epsilon;
+                const float denom = sqrtf(avg_sq) * bias_correction2_sqrt_inv + epsilon;
+                const float step_size = lr_t / bias_correction1;
                 // update the weights/biases
-                param.x = param.x + step_size * avg.x / denom_x;
-                param.y = param.y + step_size * avg.y / denom_y;
-                param.z = param.z + step_size * avg.z / denom_z;
-
-                params[idx] = param;
+                params[idx] -= step_size * (avg / denom);
                 d_avg[idx] = avg;
                 d_avg_sq[idx] = avg_sq;
             }

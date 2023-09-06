@@ -42,7 +42,7 @@ namespace gs {
         class AdamParameterBase {
         public:
             virtual ~AdamParameterBase() = default;
-            virtual void Step(cudaStream_t stream, int step) = 0;
+            virtual void Step(cudaStream_t stream, torch::Tensor step) = 0;
             virtual ParamType GetType() = 0;
             virtual void UpdateLearningRate(float lr) = 0;
         };
@@ -57,9 +57,9 @@ namespace gs {
                           float beta2 = 0.999f,
                           float epsilon = 1e-15f);
             ~AdamParameter() override;
-            void Step(cudaStream_t stream, int step) override;
+            void Step(cudaStream_t stream, torch::Tensor step) override;
             inline ParamType GetType() override { return _param_type; }
-            inline void UpdateLearningRate(float lr) override { _lr = lr; }
+            inline void UpdateLearningRate(float lr) { _lr = lr; }
             torch::Tensor Get_Exp_Avg() { return _d_avg; }
             torch::Tensor Get_Exp_Avg_Sq() { return _d_avg_sq; }
             torch::Tensor Get_Step() { return _d_steps; }
@@ -104,7 +104,7 @@ namespace gs {
             }
 
         private:
-            int _global_step = 0;
+            torch::Tensor _global_step = torch::tensor({0}, torch::kInt32).to(torch::kCUDA);
             std::unordered_map<ParamType, std::shared_ptr<AdamParameterBase>> _params;
         };
     } // namespace optim
