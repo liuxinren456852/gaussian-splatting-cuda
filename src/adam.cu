@@ -69,7 +69,7 @@ namespace gs {
         AdamParameter::~AdamParameter() {
         }
 
-        void AdamParameter::Step(cudaStream_t stream) {
+        void AdamParameter::Step(cudaStream_t stream, int step) {
             //            static const int threads_per_block = 256;
             //            static const int blocks_per_grid = (_d_params.size(0) + threads_per_block - 1) / threads_per_block;
             //            const bool avg_equal = _d_avg.sizes() == _d_params.sizes();
@@ -84,8 +84,12 @@ namespace gs {
             _d_avg = _beta1 * _d_avg + (1.f - _beta1) * _d_params_grad;
             _d_avg_sq = _beta2 * _d_avg_sq + (1.f - _beta2) * _d_params_grad * _d_params_grad;
 
-            const auto denom = _d_avg_sq.sqrt() + _epsilon;
-            _d_params = _d_params - _lr * _d_avg / denom;
+            float bias_correction1 = 1.f - std::pow(_beta1, step);
+            float bias_correction2 = 1.f - std::pow(_beta2, step);
+            float bias_correction2_sqrt_inv = 1.f / std::sqrt(bias_correction2);
+            const auto denom = (_d_avg_sq.sqrt() * bias_correction2_sqrt_inv) + _epsilon;
+            auto step_size = _lr / bias_correction1;
+            _d_params -= step_size * (_d_avg / denom);
             //            // Bias correction terms
             //            const float bias_correction1 = 1.f - powf(beta1, (float)current_step);
             //            const float bias_correction2 = 1.f - powf(beta2, (float)current_step);
@@ -225,12 +229,13 @@ namespace gs {
             //                param->Step(stream);
             //                cudaDeviceSynchronize();
             //            }
-            _params[ParamType::Pos]->Step(stream);
-            _params[ParamType::Scaling]->Step(stream);
-            _params[ParamType::Rotation]->Step(stream);
-            _params[ParamType::Opacity]->Step(stream);
-            _params[ParamType::Features_dc]->Step(stream);
-            _params[ParamType::Features_rest]->Step(stream);
+            ++_global_step;
+            _params[ParamType::Pos]->Step(stream, _global_step);
+            _params[ParamType::Scaling]->Step(stream, _global_step);
+            _params[ParamType::Rotation]->Step(stream, _global_step);
+            _params[ParamType::Opacity]->Step(stream, _global_step);
+            _params[ParamType::Features_dc]->Step(stream, _global_step);
+            _params[ParamType::Features_rest]->Step(stream, _global_step);
         }
 
         void AdamParameter::Set_Exp_Avg_Sq(torch::Tensor d_avg_sq) {
