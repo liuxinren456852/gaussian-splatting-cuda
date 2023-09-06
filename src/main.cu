@@ -146,9 +146,9 @@ int main(int argc, char* argv[]) {
     auto scene = gs::Scene(gaussians, modelParams);
     gaussians.Training_setup(optimParams);
 
-    auto ref_gaussians = ref::GaussianModel(modelParams.sh_degree);
-    auto ref_scene = ref::Scene(ref_gaussians, modelParams);
-    ref_gaussians.Training_setup(optimParams);
+    //    auto ref_gaussians = ref::GaussianModel(modelParams.sh_degree);
+    //    auto ref_scene = ref::Scene(ref_gaussians, modelParams);
+    //    ref_gaussians.Training_setup(optimParams);
 
     if (!torch::cuda::is_available()) {
         // At the moment, I want to make sure that my GPU is utilized.
@@ -157,12 +157,12 @@ int main(int argc, char* argv[]) {
     }
     auto pointType = torch::TensorOptions().dtype(torch::kFloat32);
     auto background = modelParams.white_background ? torch::tensor({1.f, 1.f, 1.f}) : torch::tensor({0.f, 0.f, 0.f}, pointType).to(torch::kCUDA);
-    auto ref_background = modelParams.white_background ? torch::tensor({1.f, 1.f, 1.f}) : torch::tensor({0.f, 0.f, 0.f}, pointType).to(torch::kCUDA);
+    //    auto ref_background = modelParams.white_background ? torch::tensor({1.f, 1.f, 1.f}) : torch::tensor({0.f, 0.f, 0.f}, pointType).to(torch::kCUDA);
 
     const int window_size = 11;
     const int channel = 3;
     const auto conv_window = gs::loss::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
-    const auto ref_conv_window = gs::loss::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
+    //    const auto ref_conv_window = gs::loss::create_window(window_size, channel).to(torch::kFloat32).to(torch::kCUDA, true);
     const int camera_count = scene.Get_camera_count();
 
     std::vector<int> indices;
@@ -179,30 +179,30 @@ int main(int argc, char* argv[]) {
         }
         const int camera_index = indices.back();
         auto cam = scene.Get_training_camera(camera_index);
-        auto ref_cam = scene.Get_training_camera(camera_index);
+        //        auto ref_cam = scene.Get_training_camera(camera_index);
         auto gt_image = cam.Get_original_image().clone().to(torch::kCUDA);
-        auto ref_gt_image = cam.Get_original_image().clone().to(torch::kCUDA);
+        //        auto ref_gt_image = cam.Get_original_image().clone().to(torch::kCUDA);
         indices.pop_back(); // remove last element to iterate over all cameras randomly
         if (iter % 1000 == 0) {
             gaussians.One_up_sh_degree();
-            ref_gaussians.One_up_sh_degree();
+            //            ref_gaussians.One_up_sh_degree();
         }
 
         // Render
-        auto [ref_image, ref_viewspace_points, ref_visibility_filter, ref_radii] = ref::render(ref_cam, ref_gaussians, ref_background);
-        ref_image.set_requires_grad(true);
-        ref_image.retain_grad();
+        //        auto [ref_image, ref_viewspace_points, ref_visibility_filter, ref_radii] = ref::render(ref_cam, ref_gaussians, ref_background);
+        //        ref_image.set_requires_grad(true);
+        //        ref_image.retain_grad();
         //        ref_gt_image.set_requires_grad(true);
         //        ref_gt_image.retain_grad();
         //        ref_gaussians._optimizer->zero_grad();
-        auto [ref_L1l, ref_dL_l1_loss] = ref::loss::l1_loss(ref_image, ref_gt_image);
-        auto [ref_ssim_loss, ref_dL_ssim_dimg1] = ref::loss::ssim(ref_image, ref_gt_image, ref_conv_window, window_size, channel);
-        auto ref_loss = (1.f - optimParams.lambda_dssim) * ref_L1l + optimParams.lambda_dssim * (1.f - ref_ssim_loss);
-        const auto ref_dloss_dssim = -optimParams.lambda_dssim;
-        const auto ref_dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
-        const auto ref_dloss_dimage = ref_dloss_dLl1 * ref_dL_l1_loss + ref_dloss_dssim * ref_dL_ssim_dimg1;
-        torch::save(ref_dloss_dimage, "ref_image_loss.pt");
-        ref_loss.backward();
+        //        auto [ref_L1l, ref_dL_l1_loss] = ref::loss::l1_loss(ref_image, ref_gt_image);
+        //        auto [ref_ssim_loss, ref_dL_ssim_dimg1] = ref::loss::ssim(ref_image, ref_gt_image, ref_conv_window, window_size, channel);
+        //        auto ref_loss = (1.f - optimParams.lambda_dssim) * ref_L1l + optimParams.lambda_dssim * (1.f - ref_ssim_loss);
+        //        const auto ref_dloss_dssim = -optimParams.lambda_dssim;
+        //        const auto ref_dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
+        //        const auto ref_dloss_dimage = ref_dloss_dLl1 * ref_dL_l1_loss + ref_dloss_dssim * ref_dL_ssim_dimg1;
+        //        torch::save(ref_dloss_dimage, "ref_image_loss.pt");
+        //        ref_loss.backward();
 
         //        auto diff = torch::abs(ref_dloss_dimage - ref_image.grad());
         //        auto max = torch::max(diff);
@@ -224,7 +224,6 @@ int main(int argc, char* argv[]) {
         const auto dloss_dssim = -optimParams.lambda_dssim;
         const auto dloss_dLl1 = 1.0 - optimParams.lambda_dssim;
         const auto dloss_dimage = dloss_dLl1 * dL_l1_loss + dloss_dssim * dL_ssim_dimg1;
-        cudaDeviceSynchronize();
 
         //        if (!torch::allclose(dloss_dimage, ref_image.grad(), 1e-5, 1e-5)) {
         //            std::cout << "Diff dloss_dimage" << std::endl;
@@ -245,40 +244,40 @@ int main(int argc, char* argv[]) {
 
         cudaDeviceSynchronize();
         // Update status line
-        //        if (iter % 100 == 0) {
-        //            auto cur_time = std::chrono::steady_clock::now();
-        //            std::chrono::duration<double> time_elapsed = cur_time - start_time;
-        //            // XXX shouldn't have to create a new stringstream, but resetting takes multiple calls
-        //            std::stringstream status_line;
-        //            // XXX Use thousand separators, but doesn't work for some reason
-        //            status_line.imbue(std::locale(""));
-        //            status_line
-        //                << "\rIter: " << std::setw(6) << iter
-        //                << "  Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>();
-        //            if (optimParams.early_stopping) {
-        //                status_line
-        //                    << "  ACR: " << std::fixed << std::setw(9) << std::setprecision(6) << avg_converging_rate;
-        //            }
-        //            status_line
-        //                << "  Splats: " << std::setw(10) << (int)gaussians.Get_xyz().size(0)
-        //                << "  Time: " << std::fixed << std::setw(8) << std::setprecision(3) << time_elapsed.count() << "s"
-        //                << "  Avg iter/s: " << std::fixed << std::setw(5) << std::setprecision(1) << 1.0 * iter / time_elapsed.count()
-        //                << "  " // Some extra whitespace, in case a "Pruning ... points" message gets printed after
-        //                ;
-        //            const int curlen = status_line.str().length();
-        //            const int ws = last_status_len - curlen;
-        //            if (ws > 0)
-        //                status_line << std::string(ws, ' ');
-        //            std::cout << status_line.str() << std::flush;
-        //            last_status_len = curlen;
-        //        }
+        if (iter % 100 == 0) {
+            auto cur_time = std::chrono::steady_clock::now();
+            std::chrono::duration<double> time_elapsed = cur_time - start_time;
+            // XXX shouldn't have to create a new stringstream, but resetting takes multiple calls
+            std::stringstream status_line;
+            // XXX Use thousand separators, but doesn't work for some reason
+            status_line.imbue(std::locale(""));
+            status_line
+                << "\rIter: " << std::setw(6) << iter
+                << "  Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>();
+            if (optimParams.early_stopping) {
+                status_line
+                    << "  ACR: " << std::fixed << std::setw(9) << std::setprecision(6) << avg_converging_rate;
+            }
+            status_line
+                << "  Splats: " << std::setw(10) << (int)gaussians.Get_xyz().size(0)
+                << "  Time: " << std::fixed << std::setw(8) << std::setprecision(3) << time_elapsed.count() << "s"
+                << "  Avg iter/s: " << std::fixed << std::setw(5) << std::setprecision(1) << 1.0 * iter / time_elapsed.count()
+                << "  " // Some extra whitespace, in case a "Pruning ... points" message gets printed after
+                ;
+            const int curlen = status_line.str().length();
+            const int ws = last_status_len - curlen;
+            if (ws > 0)
+                status_line << std::string(ws, ' ');
+            std::cout << status_line.str() << std::flush;
+            last_status_len = curlen;
+        }
 
         if (optimParams.early_stopping) {
             avg_converging_rate = loss_monitor.Update(loss.item<float>());
         }
         loss_add += loss.item<float>();
-        std::cout << "    Iter: " << iter << ", Splats: " << grad_means2D.size(0) << ", Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>() << std::endl;
-        std::cout << "Ref Iter: " << iter << ", Splats: " << ref_visibility_filter.size(0) << ", Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << ref_loss.item<float>() << std::endl;
+        //        std::cout << "    Iter: " << iter << ", Splats: " << grad_means2D.size(0) << ", Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << loss.item<float>() << std::endl;
+        //        std::cout << "Ref Iter: " << iter << ", Splats: " << ref_visibility_filter.size(0) << ", Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << ref_loss.item<float>() << std::endl;
         //        std::cout << "Diff Iter: " << iter << ", Diff Splats: " << std::abs(ref_visibility_filter.size(0) - grad_means2D.size(0)) << ", Diff Loss: " << std::fixed << std::setw(9) << std::setprecision(6) << std::abs(loss.item<float>() - ref_loss.item<float>()) << std::endl;
 
         {
@@ -363,10 +362,10 @@ int main(int argc, char* argv[]) {
             auto max_radii = torch::max(visible_max_radii, visible_radii);
             gaussians._max_radii2D.masked_scatter_(visibility_filter, max_radii);
 
-            auto ref_visible_max_radii = ref_gaussians._max_radii2D.masked_select(ref_visibility_filter);
-            auto ref_visible_radii = ref_radii.masked_select(ref_visibility_filter);
-            auto ref_max_radii = torch::max(ref_visible_max_radii, ref_visible_radii);
-            ref_gaussians._max_radii2D.masked_scatter_(ref_visibility_filter, ref_max_radii);
+            //            auto ref_visible_max_radii = ref_gaussians._max_radii2D.masked_select(ref_visibility_filter);
+            //            auto ref_visible_radii = ref_radii.masked_select(ref_visibility_filter);
+            //            auto ref_max_radii = torch::max(ref_visible_max_radii, ref_visible_radii);
+            //            ref_gaussians._max_radii2D.masked_scatter_(ref_visibility_filter, ref_max_radii);
 
             //  Optimizer step
             cudaDeviceSynchronize();
@@ -375,39 +374,39 @@ int main(int argc, char* argv[]) {
                 gaussians.Update_Params();
                 gaussians.Update_learning_rate(iter);
 
-                cudaDeviceSynchronize();
-                ref_gaussians._optimizer->step();
-                ref_gaussians._optimizer->zero_grad(true);
-                ref_gaussians.Update_learning_rate(iter);
+                //                cudaDeviceSynchronize();
+                //                ref_gaussians._optimizer->step();
+                //                ref_gaussians._optimizer->zero_grad(true);
+                //                ref_gaussians.Update_learning_rate(iter);
             }
 
             if (iter == optimParams.iterations) {
                 std::cout << std::endl;
                 gaussians.Save_ply(modelParams.output_path, iter, true);
-                ref_gaussians.Save_ply("ref" + modelParams.output_path.string(), iter, true);
+                //                ref_gaussians.Save_ply("ref" + modelParams.output_path.string(), iter, true);
                 break;
             }
 
             if (iter % 7'000 == 0) {
                 gaussians.Save_ply(modelParams.output_path, iter, false);
-                ref_gaussians.Save_ply("ref" + modelParams.output_path.string(), iter, false);
+                //                ref_gaussians.Save_ply("ref" + modelParams.output_path.string(), iter, false);
             }
 
             // Densification
             if (iter < optimParams.densify_until_iter) {
                 gaussians.Add_densification_stats(grad_means2D, visibility_filter);
-                ref_gaussians.Add_densification_stats(ref_viewspace_points, ref_visibility_filter);
+                //                ref_gaussians.Add_densification_stats(ref_viewspace_points, ref_visibility_filter);
                 if (iter > optimParams.densify_from_iter && iter % optimParams.densification_interval == 0) {
                     float size_threshold = iter > optimParams.opacity_reset_interval ? 20.f : -1.f;
-                    gaussians.Densify_and_prune(optimParams.densify_grad_threshold, 0.005f, scene.Get_cameras_extent(), size_threshold);
-                    cudaDeviceSynchronize();
-                    ref_gaussians.Densify_and_prune(optimParams.densify_grad_threshold, 0.005f, ref_scene.Get_cameras_extent(), size_threshold);
+                    gaussians.Densify_and_prune(optimParams.densify_grad_threshold, 0.00005f, scene.Get_cameras_extent(), size_threshold);
+                    //                    cudaDeviceSynchronize();
+                    //                    ref_gaussians.Densify_and_prune(optimParams.densify_grad_threshold, 0.005f, ref_scene.Get_cameras_extent(), size_threshold);
                 }
 
                 if (iter % optimParams.opacity_reset_interval == 0 || (modelParams.white_background && iter == optimParams.densify_from_iter)) {
                     gaussians.Reset_opacity();
-                    cudaDeviceSynchronize();
-                    ref_gaussians.Reset_opacity();
+                    //                    cudaDeviceSynchronize();
+                    //                    ref_gaussians.Reset_opacity();
                 }
             }
 
@@ -429,8 +428,8 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl
               << "All done in "
               << std::fixed << std::setw(7) << std::setprecision(3) << time_elapsed.count() << "s, avg "
-              << std::fixed << std::setw(4) << std::setprecision(1) << 1.0 * optimParams.iterations / time_elapsed.count() << " iter/s"
-              << std::endl;
+              << std::fixed << std::setw(4) << std::setprecision(1) << 1.0 * optimParams.iterations / time_elapsed.count() << " iter/s "
+              << std::fixed << std::setw(4) << gaussians.Get_xyz().size(0) << " splats" << std::endl;
 
     return 0;
 }

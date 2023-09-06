@@ -54,13 +54,10 @@ namespace gs {
             const auto l_p = (2.f * mu1_mu2 + C1) / (mu1_sq + mu2_sq + C1);
             const auto cs_p = (2.f * sigma12 + C2) / (sigma1_sq + sigma2_sq + C2);
 
-            auto lp_x = 2.f * ((mu2 - mu1 * l_p) / (mu1_sq + mu2_sq + C1));
-            auto cs_x = 2.f / (sigma1_sq + sigma2_sq + C2);
+            auto grad_mu1_wrt_img1 = torch::nn::functional::conv2d(torch::ones_like(mu1), torch::flip(window, {2, 3}), torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
+            auto lp_x = 2.f * grad_mu1_wrt_img1 * ((mu2 - mu1 * l_p) / (mu1_sq + mu2_sq + C1));
+            auto cs_x = (2.f / (sigma1_sq + sigma2_sq + C2)) * grad_mu1_wrt_img1 * ((img2 - mu2) - cs_p * (img1 - mu1));
 
-            // ts::print_debug_info(window, "window");
-            lp_x = torch::nn::functional::conv2d(lp_x, torch::flip(window, {3, 2}), torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
-            cs_x = torch::nn::functional::conv2d(cs_x, torch::flip(window, {3, 2}), torch::nn::functional::Conv2dFuncOptions().padding(window_size / 2).groups(channel));
-            cs_x = cs_x * ((img2 - mu2) - cs_p * (img1 - mu1));
             auto dL_ssim_dimg1 = (lp_x * cs_p + l_p * cs_x) / static_cast<float>(N_sq);
 
             return {ssim_map.mean(), dL_ssim_dimg1.to(dtype(torch::kFloat).device(torch::kCUDA))};

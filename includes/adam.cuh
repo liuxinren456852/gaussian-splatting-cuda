@@ -55,7 +55,7 @@ namespace gs {
                           cudaStream_t stream,
                           float beta1 = 0.9f,
                           float beta2 = 0.999f,
-                          float epsilon = 1e-8f);
+                          float epsilon = 1e-15f);
             ~AdamParameter() override;
             void Step(cudaStream_t stream) override;
             inline ParamType GetType() override { return _param_type; }

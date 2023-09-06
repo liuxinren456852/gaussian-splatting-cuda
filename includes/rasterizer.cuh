@@ -714,7 +714,7 @@ namespace gs {
 
             // return gradients for all inputs, 19 in total. :D
             return {grad_means3D,
-                    grad_means2D.clone(),
+                    grad_means2D,
                     grad_sh,
                     grad_colors_precomp,
                     grad_opacities,
