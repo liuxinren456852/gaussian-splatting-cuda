@@ -3,11 +3,6 @@
 #include "loss_monitor.cuh"
 #include "loss_utils.cuh"
 #include "parameters.cuh"
-#include "rasterizer.cuh"
-#include "ref_gaussian.cuh"
-#include "ref_loss_utils.cuh"
-#include "ref_render_utils.cuh"
-#include "ref_scene.cuh"
 #include "render_utils.cuh"
 #include "scene.cuh"
 #include <args.hxx>
@@ -127,6 +122,13 @@ int parse_cmd_line_args(const std::vector<std::string>& args,
     return 0;
 }
 
+float psnr_metric(const torch::Tensor& rendered_img, const torch::Tensor& gt_img) {
+
+    torch::Tensor squared_diff = (rendered_img - gt_img).pow(2);
+    torch::Tensor mse_val = squared_diff.view({rendered_img.size(0), -1}).mean(1, true);
+    return (20.f * torch::log10(1.0 / mse_val.sqrt())).mean().item<float>();
+}
+
 int main(int argc, char* argv[]) {
     std::vector<std::string> args;
     args.reserve(argc);
@@ -173,6 +175,7 @@ int main(int argc, char* argv[]) {
     LossMonitor loss_monitor(200);
     float avg_converging_rate = 0.f;
 
+    float psnr_value = 0.f;
     for (int iter = 1; iter < optimParams.iterations + 1; ++iter) {
         if (indices.empty()) {
             indices = get_random_indices(camera_count);
@@ -383,6 +386,7 @@ int main(int argc, char* argv[]) {
             if (iter == optimParams.iterations) {
                 std::cout << std::endl;
                 gaussians.Save_ply(modelParams.output_path, iter, true);
+                psnr_value = psnr_metric(image, gt_image);
                 //                ref_gaussians.Save_ply("ref" + modelParams.output_path.string(), iter, true);
                 break;
             }
@@ -427,9 +431,12 @@ int main(int argc, char* argv[]) {
 
     std::cout << std::endl
               << "All done in "
-              << std::fixed << std::setw(7) << std::setprecision(3) << time_elapsed.count() << "s, avg "
-              << std::fixed << std::setw(4) << std::setprecision(1) << 1.0 * optimParams.iterations / time_elapsed.count() << " iter/s "
-              << std::fixed << std::setw(4) << gaussians.Get_xyz().size(0) << " splats" << std::endl;
+              << std::fixed << std::setw(7) << std::setprecision(3) << time_elapsed.count() << "sec, avg "
+              << std::fixed << std::setw(4) << std::setprecision(1) << 1.0 * optimParams.iterations / time_elapsed.count() << " iter/sec, "
+              << gaussians.Get_xyz().size(0) << " splats, "
+              << std::fixed << std::setw(7) << std::setprecision(6) << ", psrn: " << psnr_value << std::endl
+              << std::endl
+              << std::endl;
 
     return 0;
 }
