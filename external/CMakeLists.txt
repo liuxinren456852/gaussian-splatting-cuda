@@ -1,32 +1,30 @@
-add_library(eigen3 INTERFACE IMPORTED GLOBAL)
-target_include_directories(eigen3 INTERFACE eigen)
-add_subdirectory(tinyply)
 add_subdirectory(json)
 add_subdirectory(args)
+add_subdirectory(glfw)
 add_library(glm INTERFACE IMPORTED GLOBAL)
 target_include_directories(glm INTERFACE glm)
-# --------------------------------------
-# simple-knn library
-# --------------------------------------
 
-set(SIMPLE_KNN_SOURCES
-    simple-knn/simple_knn.cu
-    simple-knn/spatial.cu
+set(GLAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/glad)
+add_library(glad STATIC
+        ${GLAD_DIR}/src/glad.c
+)
+target_include_directories(glad PUBLIC
+        ${GLAD_DIR}/include
 )
 
-add_library(simple-knn ${SIMPLE_KNN_SOURCES})
-
-set_target_properties(simple-knn PROPERTIES
-    CUDA_ARCHITECTURES native
-    CUDA_STANDARD 17 
-    CUDA_STANDARD_REQUIRED ON
-    CXX_STANDARD 17 
-    CXX_STANDARD_REQUIRED ON
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
+add_library(imgui STATIC
+        ${IMGUI_DIR}/imgui.cpp
+        ${IMGUI_DIR}/imgui_draw.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp
+        ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_demo.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
 )
-
-target_include_directories(simple-knn 
-    PUBLIC 
-    ${CMAKE_CURRENT_SOURCE_DIR}/simple-knn # we need this public to easily include the spatical.h header in our main program
-    PRIVATE 
-    ${TORCH_INCLUDE_DIRS}
+target_include_directories(imgui PUBLIC
+        ${IMGUI_DIR}
+        ${IMGUI_DIR}/backends
 )
+# ImGui needs GLFW headers
+target_link_libraries(imgui PUBLIC glfw)

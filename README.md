@@ -1,212 +1,310 @@
-# "3D Gaussian Splatting for Real-Time Radiance Field Rendering" Reproduction in C++ and CUDA
-This repository contains a reproduction of the Gaussian-Splatting software, originally developed by Inria and the Max Planck Institut for Informatik (MPII). The reproduction is written in C++ and CUDA.
-I have used the source code from the original [repo](https://github.com/graphdeco-inria/gaussian-splatting) as blueprint for my first implementation. 
-The original code is written in Python and PyTorch.
+# 3D Gaussian Splatting for Real-Time Radiance Field Rendering - C++ and CUDA Implementation
 
-I embarked on this project to deepen my understanding of the groundbreaking paper on 3D Gaussian splatting, by reimplementing everything from scratch.
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&logoColor=white)](https://discord.gg/TbxJST2BbC)
+[![Website](https://img.shields.io/badge/Website-mrnerf.com-blue)](https://mrnerf.com)
+[![Papers](https://img.shields.io/badge/Papers-Awesome%203DGS-orange)](https://mrnerf.github.io/awesome-3D-gaussian-splatting/)
 
-## 🚫 Commercial Use Disclaimer
+A high-performance C++ and CUDA implementation of 3D Gaussian Splatting, built upon the [gsplat](https://github.com/nerfstudio-project/gsplat) rasterization backend.
 
-The materials, code, and assets within this repository are intended solely for educational, training, or research purposes. They may not be utilized for commercial activities without explicit authorization. Any unauthorized commercial usage, distribution, or licensing of this repository's content is strictly forbidden. I am not the license holder for the original implementation. This is derived work. For detailed terms, please refer to the license section.
-
+<img src="docs/viewer_demo.gif" alt="3D Gaussian Splatting Viewer" width="80%"/>
 
 ## News
-- **[2023-09-11]**:
-    - Resolution parameter -r [2,4,8] introduced. For instance, truck scene trains now in about 52 seconds.
-- **[2023-09-11]**:
-    - Optimization parameters can be now configured in the `opitimization_params.json` located in parameter folder.
-    - Still struggling with more floaters without autograd. Its harder to get it right than I thought.
-- **[2023-09-07]**:
-    - Introduced the PSNR metric for a more accurate comparison of image quality relative to the reference implementation.
-    - There hasn't been much activity on the master branch lately. 
-      I've been focusing intently on the cuda-optimizer branch to eliminate autograd. 
-      I faced challenges with disrupted training and encountered several bugs. 
-      However, I've now successfully removed autograd, and everything appears to be in order. 
-      Additionally, the image quality has improved. Yet, these changes—coupled with optimizations removed for debugging purposes—have significantly impacted performance. 
-      I won't merge back until the performance matches or surpasses that of the master branch.
-- **[2023-08-29]**:
-    - Better Image loading error description by [paulmelis](https://github.com/paulmelis)
-    - I've spent some time working on manual loss derivatives with the aim of completely eliminating the need for autograd. 
-      The derivation appears to be accurate, as confirmed by a comparison with a Python implementation. The transition to our custom Adam implementation is still underway, but I hope to complete it by tomorrow. 
-    - Bug fixing :(
-  
-## About this Project
-This project is a derivative of the original Gaussian-Splatting software and is governed by the Gaussian-Splatting License, which can be found in the LICENSE file in this repository. The original software was developed by Inria and MPII.
+- **[2025-06-20]**: Added interactive viewer with real-time visualization during training by @panxkun.
+- **[2025-06-19]**: Metrics are now on par with gsplat-mcmc. Gsplat evals on downscaled png images whereas I used jpgs.
+- **[2025-06-15]**: Different render modes exposed, refactors, added bilateral grid.
+- **[2025-06-13]**: Metrics are getting very close to gsplat-mcmc. LPIPS and time estimates are not comparable as of now.
+- **[2025-06-10]**: Fixed some issues. We are closing the gap to the gsplat metrics. However, there is still a small mismatch.
+- **[2025-06-04]**: Added MCMC strategy with `--max-cap` command line option for controlling maximum Gaussian count.
+- **[2025-06-03]**: Switched to Gsplat backend and updated license to Apache 2.0.
+- **[2024-05-27]**: Updated to LibTorch 2.7.0 for better compatibility and performance. Breaking changes in optimizer state management have been addressed.
 
-Please be advised that the software in this repository cannot be used for commercial purposes without explicit consent from the original licensors, Inria and MPII.
+### LPIPS Model
+The implementation uses `weights/lpips_vgg.pt`, which is exported from `torchmetrics.image.lpip.LearnedPerceptualImagePatchSimilarity` with:
+- **Network type**: VGG
+- **Normalize**: False (model expects inputs in [-1, 1] range)
+- **Model includes**: VGG backbone with pretrained ImageNet weights and the scaling normalization layer
 
-## Current performance measurements as of 2023-08-17
+**Note**: While the model was exported with `normalize=False`, the C++ implementation handles the [0,1] to [-1,1] conversion internally during LPIPS computation, ensuring compatibility with images loaded in [0,1] range.
 
-NVIDIA GeForce RTX 4090
+| Scene    | Iteration | PSNR          | SSIM         | LPIPS        | Num Gaussians |
+| -------- | --------- | ------------- | ------------ | ------------ |---------------|
+| garden   | 30000     | 27.538504     | 0.866146     | 0.148426     | 1000000       |
+| bicycle  | 30000     | 25.771051     | 0.790709     | 0.244115     | 1000000       |
+| stump    | 30000     | 27.141726     | 0.805854     | 0.246617     | 1000000       |
+| bonsai   | 30000     | 32.586533     | 0.953505     | 0.224543     | 1000000       |
+| counter  | 30000     | 29.346529     | 0.923511     | 0.223990     | 1000000       |
+| kitchen  | 30000     | 31.840155     | 0.938906     | 0.141826     | 1000000       |
+| room     | 30000     | 32.511021     | 0.938708     | 0.253696     | 1000000       |
+| **mean** | **30000** | **29.533646** | **0.888191** | **0.211888** | **1000000**   |
 
-    tandt/truck:
-        ~87 seconds for 7000 iterations (my implementation 2023-08-18) 
-        ~90 seconds for 7000 iterations (my implementation 2023-08-17) 
-        ~100 seconds for 7000 iterations (my implementation 2023-08-16) 
-        ~120 seconds for 7000 iterations (my implementation 2023-08-16) 
-        ~122 seconds for 7000 iterations (original PyTorch implementation)
+For reference, here are the metrics for the official gsplat-mcmc implementation below. However, the
+lpips results are not directly comparable, as the gsplat-mcmc implementation uses a different lpips model.
 
-NVIDIA GeForce RTX 3090
+| Scene    | Iteration | PSNR          | SSIM         | LPIPS        | Num Gaussians |
+| -------- | --------- | ------------- | ------------ | ------------ | ------------- |
+| garden   | 30000     | 27.307266     | 0.854643     | 0.103883     | 1000000       |
+| bicycle  | 30000     | 25.615253     | 0.774689     | 0.182401     | 1000000       |
+| stump    | 30000     | 26.964493     | 0.789816     | 0.162758     | 1000000       |
+| bonsai   | 30000     | 32.735737     | 0.953360     | 0.105922     | 1000000       |
+| counter  | 30000     | 29.495266     | 0.924103     | 0.129898     | 1000000       |
+| kitchen  | 30000     | 31.660593     | 0.935315     | 0.087113     | 1000000       |
+| room     | 30000     | 32.265732     | 0.937518     | 0.132472     | 1000000       |
+| **mean** | **30000** | **29.434906** | **0.881349** | **0.129207** | **1000000**   |
 
-    tandt/truck:
-        ~180 seconds for 7000 iterations (Latest 2023-08-17)
-        ~200 seconds for 7000 iterations (2023-08-16)
+## Community & Support
 
-NVIDIA GeForce RTX 3050 (Ubuntu 20.04)
+Join our growing community for discussions, support, and updates:
+- 💬 **[Discord Community](https://discord.gg/TbxJST2BbC)** - Get help, share results, and discuss development
+- 🌐 **[mrnerf.com](https://mrnerf.com)** - Visit our website for more resources
+- 📚 **[Awesome 3D Gaussian Splatting](https://mrnerf.github.io/awesome-3D-gaussian-splatting/)** - Comprehensive paper list and resources
+- 🐦 **[@janusch_patas](https://twitter.com/janusch_patas)** - Follow for the latest updates
 
-    tandt/truck:
-        ~725.400sec seconds for 7000 iterations (Latest 2023-12-26)
+## Build and Execution Instructions
 
-
-While completely unoptimized, the gains in performance, though modest, are noteworthy.
-
-=> Next Goal: Achieve 60 seconds for 7000 iterations in my implementation
-
-## Build and Execution instructions
-### Software Prerequisites 
-1. Linux (tested with Ubuntu 22.04), windows probably won't work.
-2. CMake 3.24 or higher.
-3. CUDA 11.7 or higher (might work with a lower version, has to be manually set and tested).
-4. Python with development headers.
-5. libtorch: You can find the setup instructions in the libtorch section of this README.
-6. Other dependencies will be handled by the CMake script.
+### Software Prerequisites
+1. **Linux** (tested with Ubuntu 22.04) - Windows is currently not supported
+2. **CMake** 3.24 or higher
+3. **CUDA** 11.8 or higher (may work with lower versions with manual configuration)
+4. **Python** with development headers
+5. **LibTorch 2.7.0** - Setup instructions below
+6. Other dependencies are handled automatically by CMake
 
 ### Hardware Prerequisites
-1. NVIDIA GPU with CUDA support. Successfully tested so far are RTX 4090, RTX A5000, 3090Ti and A100. With 3080Ti there is an outstanding issue (#21) with larger datasets.
-2. So far, the lowest compute capability tested was 8.0.
+1. **NVIDIA GPU** with CUDA support
+    - Successfully tested: RTX 4090, RTX A5000, RTX 3090Ti, A100
+    - Known issue with RTX 3080Ti on larger datasets (see #21)
+2. Minimum compute capability: 8.0
 
-It might work with other NVIDIA GPUs as well, but these are mostly untested. If you do successfully run on such hardware please 
-post a message in the Discussions section of the repo.
+> If you successfully run on other hardware, please share your experience in the Discussions section!
 
-### Build
+### Build Instructions
+
 ```bash
+# Clone the repository with submodules
 git clone --recursive https://github.com/MrNeRF/gaussian-splatting-cuda
 cd gaussian-splatting-cuda
-wget https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.0.1%2Bcu118.zip  
-unzip  libtorch-cxx11-abi-shared-with-deps-2.0.1+cu118.zip -d external/
-rm libtorch-cxx11-abi-shared-with-deps-2.0.1+cu118.zip
+
+# Download and setup LibTorch
+wget https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu118.zip  
+unzip libtorch-cxx11-abi-shared-with-deps-2.7.0+cu118.zip -d external/
+rm libtorch-cxx11-abi-shared-with-deps-2.7.0+cu118.zip
+
+# Build the project
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -- -j
 ```
 
-### Dataset
-The dataset is not included in this repository. You can download it from the original repository under the following link:
-[tanks & trains](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/datasets/input/tandt_db.zip).
-Then unzip it in the data folder.
+## LibTorch 2.7.0
 
-### Command-Line Options
+This project uses **LibTorch 2.7.0** for optimal performance and compatibility:
 
-The `3D Gaussian Splatting CUDA Implementation` provides a suite of command-line options to facilitate easy and customizable execution. Below are the available options:
+- **Enhanced Performance**: Improved optimization and memory management
+- **API Stability**: Latest stable PyTorch C++ API
+- **CUDA Compatibility**: Better integration with CUDA 11.8+
+- **Bug Fixes**: Resolved optimizer state management issues
 
-### Core Options
+### Upgrading from Previous Versions
+1. Download the new LibTorch version using the build instructions
+2. Clean your build directory: `rm -rf build/`
+3. Rebuild the project
 
-- **-h, --help**  
-  Display this help menu.
+## Dataset
 
-- **-d, --data_path [PATH]**  
-  Specify the path to the training data.
- 
-- **-f, --force**  
-    Force overwriting of output folder. If not set, the program will exit if the output folder already exists.
- 
-- **-o, --output_path [PATH]**  
-  Specify the path to save the trained model. If this option is not specified, the trained model will be saved to the "output" folder located in the root directory of the project.
+Download the dataset from the original repository:
+[Tanks & Trains Dataset](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/datasets/input/tandt_db.zip)
 
-- **-i, --iter [NUM]**  
-  Specify the number of iterations to train the model. Although the paper sets the maximum number of iterations at 30k, you'll likely need far fewer. Starting with 6k or 7k iterations should yield preliminary results. Outputs are saved every 7k iterations and also at the end of the training. Therefore, even if you set it to 5k iterations, an output will be generated upon completion.
+Extract it to the `data` folder in the project root.
 
+## Command-Line Options
+
+### Required Options
+
+- **`-d, --data-path [PATH]`**  
+  Path to the training data containing COLMAP sparse reconstruction (required)
+
+### Output Options
+
+- **`-o, --output-path [PATH]`**  
+  Path to save the trained model (default: `./output`)
+
+### Training Options
+
+- **`-i, --iter [NUM]`**  
+  Number of training iterations (default: 30000)
+    - Paper suggests 30k, but 6k-7k often yields good preliminary results
+    - Outputs are saved every 7k iterations and at completion
+
+- **`-r, --resolution [NUM]`**  
+  Set the resolution for training images
+    - -1: Use original resolution (default)
+    - Positive values: Target resolution for image loading
+
+- **`--steps-scaler [NUM]`**  
+  Scale all training steps by this factor (default: 1)
+  - Multiplies iterations, refinement steps, and evaluation/save intervals
+  - Creates multiple scaled checkpoints for each original step
+
+### MCMC-Specific Options
+
+- **`--max-cap [NUM]`**  
+  Maximum number of Gaussians for MCMC strategy (default: 1000000)
+    - Controls the upper limit of Gaussian splats during training
+    - Useful for memory-constrained environments
+
+### Dataset Configuration
+
+- **`--images [FOLDER]`**  
+  Images folder name (default: `images`)
+    - Options: `images`, `images_2`, `images_4`, `images_8`
+    - Mip-NeRF 360 dataset uses different resolutions
+
+- **`--test-every [NUM]`**  
+  Every N-th image is used as a test image (default: 8)
+    - Used for train/validation split
+
+### Evaluation Options
+
+- **`--eval`**  
+  Enable evaluation during training
+    - Computes metrics (PSNR, SSIM, LPIPS) at specified steps
+    - Evaluation steps defined in `parameter/optimization_params.json`
+
+- **`--save-eval-images`**  
+  Save evaluation images during training
+    - Requires `--eval` to be enabled
+    - Saves comparison images and depth maps (if applicable)
+
+### Render Mode Options
+
+- **`--render-mode [MODE]`**  
+  Render mode for training and evaluation (default: `RGB`)
+    - `RGB`: Color only
+    - `D`: Accumulated depth only
+    - `ED`: Expected depth only
+    - `RGB_D`: Color + accumulated depth
+    - `RGB_ED`: Color + expected depth
+
+### Visualization Options
+
+- **`-v, --viz`**  
+  Enable the Visualization mode
+    - Displays the current state of the Gaussian splatting in a window
+    - Useful for debugging and monitoring training progress
+    
 ### Advanced Options
-- **--empty-gpu-cache**
-  Empty CUDA memory after ever 100 iterations. __Attention!__ This has a considerable performance impact
-   
-- **--enable-cr-monitoring**  
-  Enable monitoring of the average convergence rate throughout training. 
-  If done, it will stop optimizing when the average convergence rate is below 0.008 per default after 15k iterations. 
-  This is useful for speeding up the training process when the gain starts to dimish. 
-  If not enabled, the training will stop after the specified number of iterations `--iter`. Otherwise its stops when max 30k iterations are reached.
 
-- **-c, --convergence_rate [RATE]**  
-  Set custom average onvergence rate for the training process. Requires the flag `--enable-cr-monitoring` to be set.
+- **`--bilateral-grid`**  
+  Enable bilateral grid for appearance modeling
+    - Helps with per-image appearance variations
+    - Adds TV (Total Variation) regularization
 
-### Example
+- **`--sh-degree-interval [NUM]`**  
+  Interval for increasing spherical harmonics degree
+  - Controls how often SH degree is incremented during training
 
-To run the `3D Gaussian Splatting CUDA Implementation` with specified data path, output path, and iterations, use the following command:
+- **`-h, --help`**  
+  Display the help menu
 
+### Example Usage
+
+Basic training:
 ```bash
-$ ./build/gaussian_splatting_cuda -d /path/to/data -o /path/to/output -i 1000
+./build/gaussian_splatting_cuda -d /path/to/data -o /path/to/output
 ```
 
-### View the results
-For now, you will need the SIBR view
+MCMC training with limited Gaussians:
 ```bash
-git clone --recursive https://gitlab.inria.fr/sibr/sibr_core SIBR_core
-cd SIBR_viewers
-cmake -B build .
-cmake --build build --target install --config Release -- -j 
-cd ..
-```
-Then, you can view the results with:
-```bash
-./SIBR_viewers/install/bin/SIBR_gaussianViewer_app -m output
+./build/gaussian_splatting_cuda -d /path/to/data -o /path/to/output --max-cap 500000
 ```
 
-## Contributions
-Contributions are welcome! I want to make this a community project.
+Training with evaluation and custom settings:
+```bash
+./build/gaussian_splatting_cuda \
+    -d data/garden \
+    -o output/garden \
+    --images images_4 \
+    --test-every 8 \
+    --eval \
+    --save-eval-images \
+    --render-mode RGB_D \
+    -i 30000
+```
 
-Some ideas for relative straight forward contributions:
-- Revamp the README.
-- Add a proper config file or cmd line config.
+Force overwrite existing output:
+```bash
+./build/gaussian_splatting_cuda -d data/garden -o output/garden -f
+```
 
-I want to get rid of some heavy dependencies:
-- Replace glm with custom matrix operations
-- Replace the few Eigen with some custom matrix operations
+Training with step scaling for multiple checkpoints:
+```bash
+./build/gaussian_splatting_cuda \
+    -d data/garden \
+    -o output/garden \
+    --steps-scaler 3 \
+    -i 10000
+```
 
-Advanced contributions or long term goals:
-- Build a renderer to view training output in real time and to replace SIBR viewer.
-- Look into [gtsfm](https://github.com/borglab/gtsfm) to replace colmap dependency
-- CUDA optimization
-- Build a proper viewer for the training output (maybe with XR support?).
+## Configuration Files
 
-Own ideas are welcome as well!
+The implementation uses JSON configuration files located in the `parameter/` directory:
 
-### Contribution Guidelines
+### `optimization_params.json`
+Controls training hyperparameters including:
+- Learning rates for different components
+- Regularization weights
+- Refinement schedules
+- Evaluation and save steps
+- Render mode settings
+- Bilateral grid parameters
 
-Below are some guidelines to help ensure our project remains effective and consistent.
+Key parameters can be overridden via command-line options.
 
-1. **Getting Started with Contributions**:
-    - I've marked several beginner-friendly issues as **good first issues**. If you're new to the project, these are great places to start.
-    - For those looking to contribute something not currently listed as an issue or propose something in the discussion section. You can direct message me on Twitter for a quick chat. Since there are not many contributors at the moment, I'm happy to discuss your ideas and help you get started.
+## Contribution Guidelines
 
-2. **Before Submitting Your Pull Request**:
-    - Ensure you've applied `clang-format` to maintain consistent coding style. There is in tools folder a git pre-commit hook. You can just copy it to .git/hooks/pre-commit. It will run clang-format before every commit.
-    - We aim to minimize dependencies. If you're introducing a new one, it's essential to raise an issue for discussion first. There are ongoing efforts to reduce the number of dependencies, and your understanding in this area is appreciated.
+We welcome contributions! Here's how to get started:
 
-3. **Key Principles for Contributions**:
-    - **Speed**: We want to be the fastest 3D gaussian splatting implementation on this planet. Being lightning fast is key! I want instant training!
-    - **Quality**: Always prioritize high-quality rendering output. Never compromise quality for speed.
-    - **Usability**: We want to have a nice user experience. We're still perfecting this, and your contribution can make a difference!
+1. **Getting Started**:
+    - Check out issues labeled as **good first issues** for beginner-friendly tasks
+    - For new ideas, open a discussion or join our [Discord](https://discord.gg/TbxJST2BbC)
 
-4. **Dataset Contributions**:
-    - If you have a unique dataset that you believe will be an excellent addition and that is eye popping, we'd love to see it! Remember, we're aiming to showcase exceptional datasets. We want to show off the best of the best. If you're unsure, feel free to raise an issue for discussion first.
+2. **Before Submitting a PR**:
+    - Apply `clang-format` for consistent code style
+    - Use the pre-commit hook: `cp tools/pre-commit .git/hooks/`
+    - Discuss new dependencies in an issue first - we aim to minimize dependencies
 
-Together, with your contributions, we can make this project stand out. Thank you for being a part of this journey!
+## Acknowledgments
 
-## libtorch
-Initially, I utilized libtorch to simplify the development process. Once the implementation is stable with libtorch, I will begin replacing torch elements with my custom CUDA implementation.
-## MISC
-Here is random collection of things that have to be described in README later on
-- Needed for simple-knn: 
-```bash sudo apt-get install python3-dev ```
- 
-## Citation and References
-If you utilize this software or present results obtained using it, please reference the original work:
+This implementation builds upon several key projects:
 
-Kerbl, Bernhard; Kopanas, Georgios; Leimkühler, Thomas; Drettakis, George (2023). [3D Gaussian Splatting for Real-Time Radiance Field Rendering](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/). ACM Transactions on Graphics, 42(4).
+- **[gsplat](https://github.com/nerfstudio-project/gsplat)**: We use gsplat's highly optimized CUDA rasterization backend, which provides significant performance improvements and better memory efficiency.
 
-This will ensure the original authors receive the recognition they deserve.
+- **Original 3D Gaussian Splatting**: Based on the groundbreaking work by Kerbl et al.
+
+## Citation
+
+If you use this software in your research, please cite the original work:
+
+```bibtex
+@article{kerbl3Dgaussians,
+  author    = {Kerbl, Bernhard and Kopanas, Georgios and Leimkühler, Thomas and Drettakis, George},
+  title     = {3D Gaussian Splatting for Real-Time Radiance Field Rendering},
+  journal   = {ACM Transactions on Graphics},
+  number    = {4},
+  volume    = {42},
+  month     = {July},
+  year      = {2023},
+  url       = {https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/}
+}
+```
 
 ## License
 
-This project is licensed under the Gaussian-Splatting License - see the [LICENSE](LICENSE) file for details.
+See LICENSE file for details.
 
-Follow me on Twitter if you want to know more about the latest development: https://twitter.com/janusch_patas
+---
+
+**Connect with us:**
+- 🌐 Website: [mrnerf.com](https://mrnerf.com)
+- 📚 Papers: [Awesome 3D Gaussian Splatting](https://mrnerf.github.io/awesome-3D-gaussian-splatting/)
+- 💬 Discord: [Join our community](https://discord.gg/TbxJST2BbC)
+- 🐦 Twitter: Follow [@janusch_patas](https://twitter.com/janusch_patas) for development updates
